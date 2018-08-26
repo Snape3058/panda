@@ -177,7 +177,12 @@ def MakeCommand(opts, command, suffix, additional):
         print('What is this? ' + command['arguments'][0])
         assert False
 
-    outputIndex = command['arguments'].index('-o') + 1
+    outputIndex = -1
+    try:
+        outputIndex = command['arguments'].index('-o') + 1
+    except ValueError:
+        outputIndex = len(command['arguments']) + 1
+        command['arguments'].extend(['-o', command['file']+'.o'])
     command['arguments'][outputIndex] = GenerateOutput(
             opts['output'], command['arguments'][outputIndex], suffix)
     command['output'] = command['arguments'][outputIndex]
