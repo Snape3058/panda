@@ -218,7 +218,8 @@ def RunCommand(opts, command):
         except FileExistsError:  # may happen when multi-thread
             pass
 
-    popen(arguments, cwd=command['directory'])
+    process = popen(arguments, cwd=command['directory'])
+    process.wait()
 
 
 # PreprocessProject: monitor and control the process of preprocess
