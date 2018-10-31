@@ -153,8 +153,6 @@ def GenerateInput(inputDir, originalInput):
 #   suffix: the suffix representing its file type to replace '.o'
 def GenerateOutput(outputDir, originalOutput, suffix):
     assert '.o' == originalOutput[-2:]
-    if '/' == originalOutput[0]:
-        return originalOutput[:-1] + suffix
     if '/' == outputDir[-1]:
         return outputDir + originalOutput[:-1] + suffix
     else:
