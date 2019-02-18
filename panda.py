@@ -152,11 +152,10 @@ def GenerateInput(inputDir, originalInput):
 #   originalOutput: the output argument provided by '-o' argument in JSON
 #   suffix: the suffix representing its file type to replace '.o'
 def GenerateOutput(outputDir, originalOutput, suffix):
-    assert '.o' == originalOutput[-2:]
     if '/' == outputDir[-1]:
-        return outputDir + originalOutput[:-1] + suffix
+        return outputDir + originalOutput + '.' + suffix
     else:
-        return outputDir + '/' + originalOutput[:-1] + suffix
+        return outputDir + '/' + originalOutput + '.' + suffix
 
 
 # MakeCommand: replace the arguments with correct value for preprocess
