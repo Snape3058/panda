@@ -133,29 +133,38 @@ def ParseArguments(args):
     return opts
 
 
+# RecoverOriginalFileName: recover the original absolute file name in command
+#
+#   directory: the directory where the compilation happened
+#           e.g. json['directory']
+#   filename: the filename to be parsed (can be both relative and absolute)
+#           e.g. input file (json['file']), output file (-o value)
+#                include directory (-I value)
+#
+#   return: if filename is relative path, then concatenate them
+#           if is absolute path, then drop directory and return filename directly
+def RecoverOriginalFileName(directory, filename):
+    return os.path.abspath(os.path.join(directory, filename))
+
+
 # GenerateInput: generate the full path of input file
 #
 #   inputDir: the prefix of originalInput
 #   originalInput: the input argument provided by JSON
 def GenerateInput(inputDir, originalInput):
-    if '/' == originalInput[0]:
-        return originalInput
-    if '/' == inputDir[-1]:
-        return inputDir + originalInput
-    else:
-        return inputDir + '/' + originalInput
+    return RecoverOriginalFileName(inputDir, originalInput)
 
 
 # GenerateOutput: generate the full path of output file with file type suffix
 #
 #   outputDir: the output argument provided in command arguments
-#   originalOutput: the output argument provided by '-o' argument in JSON
+#   originalOutput: the recovered output filename
 #   suffix: the suffix representing its file type to replace '.o'
+#
+#   return: the absolute path of the output file in format:
+#           /outputdir/absolute/path/to/output/file.suffix
 def GenerateOutput(outputDir, originalOutput, suffix):
-    if '/' == outputDir[-1]:
-        return outputDir + originalOutput + '.' + suffix
-    else:
-        return outputDir + '/' + originalOutput + '.' + suffix
+    return os.path.join(outputDir, originalOutput[1:]) + '.' + suffix
 
 
 # MakeCommand: replace the arguments with correct value for preprocess
@@ -181,7 +190,10 @@ def MakeCommand(opts, command, suffix, additional):
         outputIndex = len(command['arguments']) + 1
         command['arguments'].extend(['-o', command['file']+'.o'])
     command['arguments'][outputIndex] = GenerateOutput(
-            opts['output'], command['arguments'][outputIndex], suffix)
+            opts['output'],
+            RecoverOriginalFileName(command['directory'],
+                command['arguments'][outputIndex]),
+            suffix)
     command['output'] = command['arguments'][outputIndex]
 
     inputIndex = command['arguments'].index(command['file'])
