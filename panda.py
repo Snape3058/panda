@@ -147,12 +147,19 @@ def RecoverOriginalFileName(directory, filename):
     return os.path.abspath(os.path.join(directory, filename))
 
 
-# GenerateInput: generate the full path of input file
+# GenerateCompiler: generate the preprocessor compiler
 #
-#   inputDir: the prefix of originalInput
-#   originalInput: the input argument provided by JSON
-def GenerateInput(inputDir, originalInput):
-    return RecoverOriginalFileName(inputDir, originalInput)
+#   command: the original command object to be processed
+#
+#   return: the preprocessor compiler
+def GenerateCompiler(opts, command):
+    # check suffix only as the compiler argument can be full path
+    if 'cc' == command['arguments'][0][-2:]:
+        return opts['compiler']['cc']
+    elif 'c++' == command['arguments'][0][-3:]:
+        return opts['compiler']['c++']
+    else:
+        assert False, 'What is this compiler? ' + command['arguments'][0]
 
 
 # GenerateOutput: generate the full path of output file with file type suffix
@@ -163,8 +170,9 @@ def GenerateInput(inputDir, originalInput):
 #
 #   return: the absolute path of the output file in format:
 #           /outputdir/absolute/path/to/output/file.suffix
-def GenerateOutput(outputDir, originalOutput, suffix):
-    return os.path.join(outputDir, originalOutput[1:]) + '.' + suffix
+def GenerateOutput(outputDir, workspace, originalOutput, suffix):
+    recoveredOutput = RecoverOriginalFileName(workspace, originalOutput)
+    return os.path.join(outputDir, recoveredOutput[1:]) + '.' + suffix
 
 
 # MakeCommand: replace the arguments with correct value for preprocess
@@ -173,36 +181,58 @@ def GenerateOutput(outputDir, originalOutput, suffix):
 #   command: the command object parsed from JSON
 #   suffix: the suffix representing its file type to replace '.o'
 #   additional: the additional arguments to do the corresponding preprocess
+#
+#   return: command object
+#       the command object is defined as follows:
+#           - arguments: list of arguments to be executed by compiler
+#           - directory: compiler working directory
+#           - output: directory of -o parameter
 def MakeCommand(opts, command, suffix, additional):
-    command = deepcopy(command)
-    if 'cc' == command['arguments'][0][-2:]:
-        command['arguments'][0] = opts['compiler']['cc']
-    elif 'c++' == command['arguments'][0][-3:]:
-        command['arguments'][0] = opts['compiler']['c++']
-    else:
-        print('What is this? ' + command['arguments'][0])
-        assert False
+    # only define, undef, include are kept
+    KEEP_ARGUMENTS = ['-D', '-U', '-I']
 
-    outputIndex = -1
-    try:
-        outputIndex = command['arguments'].index('-o') + 1
-    except ValueError:
-        outputIndex = len(command['arguments']) + 1
-        command['arguments'].extend(['-o', command['file']+'.o'])
-    command['arguments'][outputIndex] = GenerateOutput(
-            opts['output'],
-            RecoverOriginalFileName(command['directory'],
-                command['arguments'][outputIndex]),
-            suffix)
-    command['output'] = command['arguments'][outputIndex]
+    arguments = []
+    output = None
 
-    inputIndex = command['arguments'].index(command['file'])
-    command['arguments'][inputIndex] = GenerateInput(
-            command['directory'], command['file'])
+    # generate compiler
+    arguments.append(GenerateCompiler(opts, command))
 
-    command['arguments'] += additional
+    # generate arguments
+    i = iter(command['arguments'])
+    while True:
+        A = next(i, None)
+        if A is None:
+            break
 
-    return command
+        # generate output argument if it has
+        if '-o' == A:
+            output = GenerateOutput(opts['output'], command['directory'],
+                    next(i), suffix)
+            arguments += ['-o', output]
+
+        # generate the argument should be kept
+        elif A[:2] in KEEP_ARGUMENTS:
+            if A in KEEP_ARGUMENTS:
+                arguments.append(A + next(i))
+            else:
+                arguments.append(A)
+
+    # append output argument if it does not have
+    if output is None:
+        output = GenerateOutput(opts['output'], command['directory'],
+                command['file'], suffix)
+        arguments += ['-o', output]
+
+    # append input argument
+    arguments.append(RecoverOriginalFileName(
+        command['directory'], command['file']))
+
+    # append additional arguments for generating targets
+    arguments += additional
+
+    return {'directory': command['directory'],
+            'arguments': arguments,
+            'output': output}
 
 
 # RunCommand: run the command to do the preprocess
@@ -219,8 +249,7 @@ def RunCommand(opts, command):
     if opts['dry-run']:
         return
 
-    outputIndex = arguments.index('-o') + 1
-    outputDir = os.path.dirname(arguments[outputIndex])
+    outputDir = os.path.dirname(command['output'])
     if not os.path.exists(outputDir):
         try:
             os.makedirs(outputDir)
@@ -249,11 +278,11 @@ def PreprocessProject(opts):
 
         if opts['generate-ll']:
             RunCommand(opts, MakeCommand(
-                opts, job, 'll', ['-emit-llvm', '-S']))
+                opts, job, 'll', ['-c', '-g', '-emit-llvm', '-S']))
 
         if opts['generate-bc']:
             RunCommand(opts, MakeCommand(
-                opts, job, 'bc', ['-emit-llvm']))
+                opts, job, 'bc', ['-c', '-g', '-emit-llvm']))
 
     if not os.path.exists(opts['output']):
         os.makedirs(opts['output'])
