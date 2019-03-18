@@ -192,7 +192,6 @@ def MakeCommand(opts, command, suffix, additional):
     KEEP_ARGUMENTS = ['-D', '-U', '-I']
 
     arguments = []
-    output = None
 
     # generate compiler
     arguments.append(GenerateCompiler(opts, command))
@@ -204,11 +203,9 @@ def MakeCommand(opts, command, suffix, additional):
         if A is None:
             break
 
-        # generate output argument if it has
+        # remove output argument if it has
         if '-o' == A:
-            output = GenerateOutput(opts['output'], command['directory'],
-                    next(i), suffix)
-            arguments += ['-o', output]
+            A = next(i)
 
         # generate the argument should be kept
         elif A[:2] in KEEP_ARGUMENTS:
@@ -217,11 +214,10 @@ def MakeCommand(opts, command, suffix, additional):
             else:
                 arguments.append(A)
 
-    # append output argument if it does not have
-    if output is None:
-        output = GenerateOutput(opts['output'], command['directory'],
-                command['file'], suffix)
-        arguments += ['-o', output]
+    # append output argument
+    output = GenerateOutput(opts['output'], command['directory'],
+            command['file'], suffix)
+    arguments += ['-o', output]
 
     # append input argument
     arguments.append(RecoverOriginalFileName(
