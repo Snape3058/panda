@@ -187,14 +187,11 @@ def GenerateOutput(outputDir, workspace, originalOutput, suffix):
 #           - arguments: list of arguments to be executed by compiler
 #           - directory: compiler working directory
 #           - output: directory of -o parameter
-def MakeCommand(opts, command, suffix, additional):
-    # only define, undef, include are kept
-    KEEP_ARGUMENTS = ['-D', '-U', '-I']
+def MakeCommand(opts, command, suffix, additional, keptArgs):
+    arguments = [GenerateCompiler(opts, command)]
 
-    arguments = []
-
-    # generate compiler
-    arguments.append(GenerateCompiler(opts, command))
+    # append additional arguments for generating targets
+    arguments += additional
 
     # generate arguments
     i = iter(command['arguments'])
@@ -208,11 +205,14 @@ def MakeCommand(opts, command, suffix, additional):
             A = next(i)
 
         # generate the argument should be kept
-        elif A[:2] in KEEP_ARGUMENTS:
-            if A in KEEP_ARGUMENTS:
-                arguments.append(A + next(i))
-            else:
-                arguments.append(A)
+        else:
+            for kept in keptArgs:
+                head = A[:len(kept)]
+                if kept == head:
+                    if head == A:
+                        arguments.append(A + next(i))
+                    else:
+                        arguments.append(A)
 
     # append output argument
     output = GenerateOutput(opts['output'], command['directory'],
@@ -222,9 +222,6 @@ def MakeCommand(opts, command, suffix, additional):
     # append input argument
     arguments.append(RecoverOriginalFileName(
         command['directory'], command['file']))
-
-    # append additional arguments for generating targets
-    arguments += additional
 
     return {'directory': command['directory'],
             'arguments': arguments,
@@ -266,19 +263,23 @@ def PreprocessProject(opts):
     def jobRun(opts, job):
         if opts['generate-ast']:
             RunCommand(opts, MakeCommand(
-                opts, job, 'ast', ['-emit-ast']))
+                opts, job, 'ast', ['-emit-ast'],
+                ['-std', '-D', '-U', '-I']))
 
         if opts['generate-i']:
             RunCommand(opts, MakeCommand(
-                opts, job, 'i', ['-E']))
+                opts, job, 'i', ['-E'],
+                ['-std', '-D', '-U', '-I']))
 
         if opts['generate-ll']:
             RunCommand(opts, MakeCommand(
-                opts, job, 'll', ['-c', '-g', '-emit-llvm', '-S']))
+                opts, job, 'll', ['-c', '-g', '-emit-llvm', '-S'],
+                ['-std', '-D', '-U', '-I', '-f', '-m']))
 
         if opts['generate-bc']:
             RunCommand(opts, MakeCommand(
-                opts, job, 'bc', ['-c', '-g', '-emit-llvm']))
+                opts, job, 'bc', ['-c', '-g', '-emit-llvm'],
+                ['-std', '-D', '-U', '-I', '-f', '-m']))
 
     if not os.path.exists(opts['output']):
         os.makedirs(opts['output'])
