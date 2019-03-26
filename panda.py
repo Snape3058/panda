@@ -4,133 +4,83 @@ import os
 import sys
 import json
 import threadpool
-from getopt import getopt
-from copy import deepcopy
+import argparse
 from subprocess import Popen as popen
 
 
-HelpMsg = '''panda-- Generate .ast/.i/.ll/.bc files with output from bear.
-Introduction:
-  This program is used for preprocess the source code and generate the proper
-  format of preprocessed files. It can generate preprocessed files in four
-  kinds of formats:
-    - <filename>.ast: the CPCH files in clang AST format
-    - <filename>.i  : the compiler preprocessor output format
-    - <filename>.ll : the LLVM-IR disassembly format
-    - <filename>.bc : the LLVM bitcode format
-  The program requires the input 'compile_commands.json' is in bear format.
+# default configurations and strings
+class Default:
+    # configurable names, tags, and other strings
+    ast = 'Clang PCH file'
+    i = 'C/C++ preprocessed file'
+    ll = 'LLVM IR file'
+    bc = 'LLVM BitCode file'
+    fm = 'Clang function-mapping file'
+    Version = '2.0'
+    Commit = '%REPLACE_COMMIT_INFO%'
+    Now = '%REPLACE_NOW%'
 
-Usage: panda [options]
+    # program description
+    DescriptionMsg = '''Generate preprocessed files from compilation database.
 
-Options:
-  -A, --generate-ast
-    Preprocess the source code to the CPCH files in clang AST format.
+This program is used for preprocessing C/C++ source code files with the
+help of Clang compilation database. It can generate preprocessed files in
+the following kinds of formats:
+  - <filename>.ast    : the {}
+  - <filename>.i      : the {}
+  - <filename>.ll     : the {}
+  - <filename>.bc     : the {}
+  - externalFnMap.txt : the {}
+'''.format(ast, i, ll, bc, fm)
 
-  -E, --generate-i
-    Preprocess the source code to the compiler preprocessor output format.
-
-  -S, --generate-ll
-    Preprocess the source code to the LLVM-IR disassembly format.
-
-  -B, --generate-bc
-    Preprocess the source code to the LLVM bitcode format.
-
-  -c <path_to_C_compiler>, --cc=<path_to_C_compiler>
-    Customize the C compiler.
-
-  -C <path_to_C++_compiler>, --c++=<path_to_C++_compiler>
-    Customize the C++ compiler.
-
-  -j <N>
-    Customize job count, allow N jobs at once.
-
-  -f <filename>
-    Customize the input 'compile_commands.json' file.
-    (default is './compile_commands.json')
-
-  -o <output_dir>
-    Customize the output directory.
-    (default is './')
-
-  -V
-    Dump the command executed during execution.
-
-  --dry-run
-    Dump the command will be executed and exit.
-
-  -v, --version
-    Print the version information.
-
-  -h, --help
-    Print this message.
-'''
+    # program version info
+    VersionMsg = '''panda {} ({})
+Provided by REST team, ISCAS.
+Copyright 2018-{}. All rights reserved.'''.format(
+            Version, Commit, Now)
 
 
-VersionMsg = '''panda 1.0
-Python ''' + sys.version
-
-
-# ParseArguments: parse command line arguments with getopt.
-#
-# Refer to HelpMsg for more info, and remember to update HelpMsg when
-# command line arguments are modified.
+# ParseArguments: parse command line arguments with argparse.
 def ParseArguments(args):
-    options, arguments = getopt(
-            args[1:], 'hvVo:f:c:C:j:AESB', [
-                'help', 'version', 'dry-run', 'cc', 'c++'
-                'generate-ast', 'generate-i', 'generate-ll', 'generate-bc'
-                ]
-            )
-    opts = {'verbose': False,
-            'dry-run': False,
-            'output': os.path.realpath('./'),
-            'input': 'compile_commands.json',
-            'compiler': {'cc': 'clang', 'c++': 'clang++'},
-            'generate-i': False,
-            'generate-ast': False,
-            'generate-ll': False,
-            'generate-bc': False,
-            'jobs': 1,
-            }
-    for i in options:
-        if '-h' == i[0] or '--help' == i[0]:
-            print(HelpMsg)
-            return {}
-        elif '-v' == i[0] or '--version' == i[0]:
-            print(VersionMsg)
-            return {}
-        elif '-V' == i[0]:
-            opts['verbose'] = True
-        elif '--dry-run' == i[0]:
-            opts['dry-run'] = True
-        elif '-o' == i[0]:
-            opts['output'] = os.path.realpath(i[1])
-        elif '-f' == i[0]:
-            opts['input'] = i[1]
-        elif '-c' == i[0] or '--cc' == i[0]:
-            opts['compiler']['cc'] = i[1]
-        elif '-C' == i[0] or '--c++' == i[0]:
-            opts['compiler']['c++'] = i[1]
-        elif '-j' == i[0]:
-            try:
-                jobcount = int(i[1])
-                assert jobcount >= 1
-                opts['jobs'] = jobcount
-            except Exception:
-                print('bad parameter for -j argument.')
-        elif '-A' == i[0] or '--generate-ast' == i[0]:
-            opts['generate-ast'] = True
-        elif '-E' == i[0] or '--generate-i' == i[0]:
-            opts['generate-i'] = True
-        elif '-S' == i[0] or '--generate-ll' == i[0]:
-            opts['generate-ll'] = True
-        elif '-B' == i[0] or '--generate-bc' == i[0]:
-            opts['generate-bc'] = True
-        else:
-            print("Bad option '" + i[0] + "'.")
-            print(HelpMsg)
-            return {}
-    return opts
+    parser = argparse.ArgumentParser(description=Default.DescriptionMsg,
+            formatter_class=argparse.RawTextHelpFormatter)
+    parser.add_argument('-v', '--version', action='version', version=Default.VersionMsg)
+    parser.add_argument('-V', '--verbose', action='store_true', dest='verbose',
+            help='Verbose output mode.')
+    parser.add_argument('-A', '--generate-ast', action='store_true', dest='ast',
+            help='Generate {}.'.format(Default.ast))
+    parser.add_argument('-E', '--generate-i', action='store_true', dest='i',
+            help='Generate {}.'.format(Default.i))
+    parser.add_argument('-S', '--generate-ll', action='store_true', dest='ll',
+            help='Generate {}.'.format(Default.ll))
+    parser.add_argument('-B', '--generate-bc', action='store_true', dest='bc',
+            help='Generate {}.'.format(Default.bc))
+    parser.add_argument('-M', '--generate-fm', action='store_true', dest='fm',
+            help='Generate {}.'.format(Default.fm))
+    parser.add_argument('-P', '--copy-file', action='store_true', dest='cp',
+            help='Copy source code file to output directory.')
+    parser.add_argument('-o', '--output',
+            type=str, dest='output', default=os.path.abspath('./'),
+            help='Customize the output directory. (default is "./")')
+    parser.add_argument('-f', '--database', metavar='<compile_commands.json>',
+            type=str, dest='input', default=os.path.abspath('./compile_commands.json'),
+            help='Customize the compilation database file.')
+    parser.add_argument('-c', '--cc',
+            type=str, dest='cc', default='clang',
+            help='Customize the C compiler. (default is clang)')
+    parser.add_argument('-C', '--cxx',
+            type=str, dest='cxx', default='clang++',
+            help='Customize the C++ compiler. (default is clang++)')
+    parser.add_argument('-m', '--fnmapping',
+            type=str, dest='fnmapping', default='clang-func-mapping',
+            help='Customize the function mapping scanner. (default is clang-func-mapping)')
+    parser.add_argument('-j', '--jobs', type=int, dest='jobs', default=1,
+            help='Customize the number of jobs allowed in parallel.')
+    parser.add_argument('--dump', action='store_true', dest='dump',
+            help='Generate and dump commands to stdout only.')
+    parser.add_argument('--ctu', action='store_true', dest='ctu',
+            help='Alias to -M -A -P.')
+    return parser.parse_args(args[1:])
 
 
 # RecoverOriginalFileName: recover the original absolute file name in command
@@ -155,9 +105,9 @@ def RecoverOriginalFileName(directory, filename):
 def GenerateCompiler(opts, command):
     # check suffix only as the compiler argument can be full path
     if 'cc' == command['arguments'][0][-2:]:
-        return opts['compiler']['cc']
+        return opts.cc
     elif 'c++' == command['arguments'][0][-3:]:
-        return opts['compiler']['c++']
+        return opts.cxx
     else:
         assert False, 'What is this compiler? ' + command['arguments'][0]
 
@@ -215,7 +165,7 @@ def MakeCommand(opts, command, suffix, additional, keptArgs):
                         arguments.append(A)
 
     # append output argument
-    output = GenerateOutput(opts['output'], command['directory'],
+    output = GenerateOutput(opts.output, command['directory'],
             command['file'], suffix)
     arguments += ['-o', output]
 
@@ -236,10 +186,10 @@ def RunCommand(opts, command):
     print('Generating "' + command['output'] + '"')
 
     arguments = command['arguments']
-    if opts['verbose'] or opts['dry-run']:
+    if opts.verbose or opts.dump:
         print(arguments)
 
-    if opts['dry-run']:
+    if opts.dump:
         return
 
     outputDir = os.path.dirname(command['output'])
@@ -257,40 +207,37 @@ def RunCommand(opts, command):
 #
 #   opts: opts object (refer to ParseArguments)
 def PreprocessProject(opts):
-    if not opts:
-        return
-
     def jobRun(opts, job):
-        if opts['generate-ast']:
+        if opts.ast:
             RunCommand(opts, MakeCommand(
                 opts, job, 'ast', ['-emit-ast'],
                 ['-std', '-D', '-U', '-I']))
 
-        if opts['generate-i']:
+        if opts.i:
             RunCommand(opts, MakeCommand(
                 opts, job, 'i', ['-E'],
                 ['-std', '-D', '-U', '-I']))
 
-        if opts['generate-ll']:
+        if opts.ll:
             RunCommand(opts, MakeCommand(
                 opts, job, 'll', ['-c', '-g', '-emit-llvm', '-S'],
                 ['-std', '-D', '-U', '-I', '-f', '-m']))
 
-        if opts['generate-bc']:
+        if opts.bc:
             RunCommand(opts, MakeCommand(
                 opts, job, 'bc', ['-c', '-g', '-emit-llvm'],
                 ['-std', '-D', '-U', '-I', '-f', '-m']))
 
-    if not os.path.exists(opts['output']):
-        os.makedirs(opts['output'])
+    if not os.path.exists(opts.output):
+        os.makedirs(opts.output)
 
-    jobList = json.load(open(opts['input'], 'r'))
+    jobList = json.load(open(opts.input, 'r'))
 
-    if 1 == opts['jobs']:
+    if 1 == opts.jobs:
         for i in jobList:
             jobRun(opts, i)
     else:
-        pool = threadpool.ThreadPool(opts['jobs'])
+        pool = threadpool.ThreadPool(opts.jobs)
         reqs = threadpool.makeRequests(
                 jobRun, [([opts, i], None) for i in jobList])
         for i in reqs:
