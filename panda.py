@@ -18,6 +18,7 @@ class Default:  # {{{
     ll = 'LLVM IR file'
     bc = 'LLVM BitCode file'
     fm = 'Clang function-mapping file'
+    si = 'source code index file'
     filterstr = [
             '-o:',
             '-O([0123sg]|fast)?',
@@ -34,6 +35,7 @@ class Default:  # {{{
     cxx = 'clang++'
     cfm = 'clang-func-mapping'
     fmname = 'externalFnMap.txt'
+    srcidx = 'sources.txt'
 
     # program description
     DescriptionMsg = '''Generate preprocessed files from compilation database.
@@ -46,7 +48,8 @@ the following kinds of formats:
   - <filename>.ll     : the {}
   - <filename>.bc     : the {}
   - externalFnMap.txt : the {}
-'''.format(ast, i, ll, bc, fm)
+  - {:<17} : the {}
+'''.format(ast, i, ll, bc, fm, srcidx, si)
 
     # program version info
     VersionMsg = '''panda {} ({})
@@ -74,6 +77,8 @@ def ParseArguments(args):  # {{{
             help='Generate {}.'.format(Default.bc))
     parser.add_argument('-M', '--generate-fm', action='store_true', dest='fm',
             help='Generate {}.'.format(Default.fm))
+    parser.add_argument('-L', '--list-files', action='store_true', dest='ls',
+            help='List source code file names to index file.')
     parser.add_argument('-P', '--copy-file', action='store_true', dest='cp',
             help='Copy source code file to output directory.')
     parser.add_argument('-o', '--output',
@@ -98,7 +103,7 @@ def ParseArguments(args):  # {{{
     parser.add_argument('--dump-only', action='store_true', dest='dump_only',
             help='Generate and dump commands to stdout only.')
     parser.add_argument('--ctu', action='store_true', dest='ctu',
-            help='Alias to -M -A -P.')
+            help='Alias to -M -A -L.')
     opts = parser.parse_args(args[1:])
 
     if opts.clang:
@@ -112,7 +117,7 @@ def ParseArguments(args):  # {{{
     if opts.ctu:
         opts.fm = True
         opts.ast = True
-        opts.cp = True
+        opts.ls = True
 
     return opts
 
@@ -247,6 +252,23 @@ def GenerateFunctionMappingList(opts, jobs):
     process.wait()
 
 
+# GenerateSourceFileList: dump all TU to an index file.
+#   NOTE: Do nothing when dump_only.
+#
+#   opts: opts object (refer to ParseArguments)
+#   jobs: the compilation database
+def GenerateSourceFileList(opts, jobs):
+    if opts.dump_only:
+        return
+
+    print('Generating {}.'.format(Default.si))
+
+    with open(Default.srcidx, 'w') as fout:
+        for i in jobs:
+            fout.write(os.path.abspath(os.path.join(i['directory'], i['file'])))
+            fout.write('\n')
+
+
 # PreprocessProject: monitor and control the process of preprocess
 #
 #   opts: opts object (refer to ParseArguments)
@@ -330,6 +352,10 @@ def PreprocessProject(opts):
     # Generate function mapping list
     if opts.fm:
         GenerateFunctionMappingList(opts, jobList)
+
+    # Generate source file list
+    if opts.ls:
+        GenerateSourceFileList(opts, jobList)
 
     # Do parallel job:
     if 1 == opts.jobs:
