@@ -138,6 +138,21 @@ def GetSourceFile(command):
     return os.path.abspath(os.path.join(command['directory'], command['file']))
 
 
+# isCommandExecutable: check whether the command executable exists and is executable
+#
+#   cmd: path to command executable to be checked
+#   opt: the option of setting the command executable
+def isCommandExecutable(cmd, opt):
+    try:
+        popen([cmd, '--version'], stdout=pipe, stderr=pipe).wait()
+    except FileNotFoundError:
+        print('Error:\tRequired tool "{}" not available. \n'
+                '\tPlease check your settings of "{}" or "--clang-path".\n'.format(
+                    os.path.basename(cmd), opt), file=sys.stderr)
+        return False
+    return True
+
+
 # MakeCommand: replace the arguments with correct value for preprocess
 #
 #   opts: opts object (refer to ParseArguments)
@@ -357,7 +372,7 @@ def PreprocessProject(opts):
 
     # Do sequential job:
     # Generate function mapping list
-    if opts.fm:
+    if opts.fm and isCommandExecutable(opts.cfm, '--cfm'):
         GenerateFunctionMappingList(opts, jobList)
 
     # Generate source file list
@@ -365,6 +380,9 @@ def PreprocessProject(opts):
         GenerateSourceFileList(opts, jobList)
 
     # Do parallel job:
+    if not isCommandExecutable(opts.cc, '--cc') or not isCommandExecutable(opts.cxx, '--cxx'):
+        sys.exit(1)
+
     if 1 == opts.jobs:
         for i in jobList:
             jobRun(opts, i)
