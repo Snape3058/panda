@@ -43,13 +43,20 @@ class Default:  # {{{
 This program is used for preprocessing C/C++ source code files with the
 help of Clang compilation database. It can generate preprocessed files in
 the following kinds of formats:
-  - <filename>.ast    : the {}
-  - <filename>.i      : the {}
-  - <filename>.ll     : the {}
-  - <filename>.bc     : the {}
-  - externalFnMap.txt : the {}
-  - {:<17} : the {}
-'''.format(ast, i, ll, bc, fm, srcidx, si)
+  - {:<20} : the {}
+  - {:<20} : the {}
+  - {:<20} : the {}
+  - {:<20} : the {}
+  - {:<20} : the {}
+  - {:<20} : the {}
+'''.format(
+        '<filename>.ast', ast,
+        '<filename>.i', i,
+        '<filename>.ll', ll,
+        '<filename>.bc', bc,
+        fmname, fm,
+        srcidx, si
+        )
 
     # program version info
     VersionMsg = '''panda {} ({})
@@ -78,7 +85,7 @@ def ParseArguments(args):  # {{{
     parser.add_argument('-M', '--generate-fm', action='store_true', dest='fm',
             help='Generate {}.'.format(Default.fm))
     parser.add_argument('-L', '--list-files', action='store_true', dest='ls',
-            help='List source code file names to index file.')
+            help='List source code file names to {}.'.format(Default.si))
     parser.add_argument('-P', '--copy-file', action='store_true', dest='cp',
             help='Copy source code file to output directory.')
     parser.add_argument('-o', '--output',
@@ -205,9 +212,9 @@ def RunCommand(command, verbose, dump_only):
     outputDir = os.path.dirname(command['output'])
 
     if dump_only:
-        print("mkdir -p " + outputDir)
-        print("cd " + command['directory'])
-        print(" \\\n\t".join(arguments))
+        print('mkdir -p ' + outputDir)
+        print('cd ' + command['directory'])
+        print(' \\\n\t'.join(arguments))
         return
     elif verbose:
         print(arguments)
@@ -238,7 +245,7 @@ def GenerateFunctionMappingList(opts, jobs):
     outfile = os.path.join(opts.output, Default.fmname)
 
     if opts.dump_only:
-        print(" \\\n\t".join(arguments) + " | \\\n" +
+        print(' \\\n\t'.join(arguments) + ' | \\\n' +
                 "\tsed 's/$/.ast/g' >" + outfile)
         return
 
