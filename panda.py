@@ -188,7 +188,8 @@ def MakeCommand(opts, command, extension, prefix, suffix, argfilter):
     arguments += argfilter(command['arguments'][1:])
 
     # generate the full path of output file with file type extension
-    output = os.path.join(opts.output, GetSourceFile(command)[1:]) + '.' + extension
+    output = os.path.abspath(os.path.join(opts.output,
+        GetSourceFile(command)[1:]) + '.' + extension)
     arguments += ['-o', output]
 
     # append additional arguments for generating targets
@@ -207,7 +208,7 @@ def MakeCommand(opts, command, extension, prefix, suffix, argfilter):
 #   return: command object of cp $file $output/$directory/$file
 def MakeCopyCommand(opts, command):
     src = GetSourceFile(command)
-    output = os.path.join(opts.output, src[1:])
+    output = os.path.abspath(os.path.join(opts.output, src[1:]))
 
     return {'directory': command['directory'],
             'arguments': ['cp', src, output],
