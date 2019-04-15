@@ -19,6 +19,10 @@ class Default:  # {{{
     bc = 'LLVM BitCode file'
     fm = 'Clang External Function Mapping file'
     si = 'source code index file'
+    astext = ['ast', 'ast']
+    iext = ['i', 'ii']
+    llext = ['ll', 'll']
+    bcext = ['bc', 'bc']
     filterstr = [
             '-o:',
             '-O([0123sg]|fast)?',
@@ -35,7 +39,6 @@ class Default:  # {{{
     cxx = 'clang++'
     cfm = 'clang-func-mapping'
     fmname = 'externalFnMap.txt'
-    srcidx = 'sources.txt'
 
     # program description
     DescriptionMsg = '''Generate preprocessed files from compilation database.
@@ -43,19 +46,19 @@ class Default:  # {{{
 This program is used for preprocessing C/C++ source code files with the
 help of Clang compilation database. It can generate preprocessed files in
 the following kinds of formats:
-  - {:<20} : the {}
-  - {:<20} : the {}
-  - {:<20} : the {}
-  - {:<20} : the {}
-  - {:<20} : the {}
-  - {:<20} : the {}
+  - {:<30} : the {}
+  - {:<30} : the {}
+  - {:<30} : the {}
+  - {:<30} : the {}
+  - {:<30} : the {}
+  - {:<30} : the {}
 '''.format(
         '<filename>.ast', ast,
         '<filename>.i', i,
         '<filename>.ll', ll,
         '<filename>.bc', bc,
         fmname, fm,
-        srcidx, si
+        '[source|ast|i|ll|bc]-index.txt', si
         )
 
     # program version info
@@ -85,7 +88,7 @@ def ParseArguments(args):  # {{{
     parser.add_argument('-M', '--generate-fm', action='store_true', dest='fm',
             help='Generate {}.'.format(Default.fm))
     parser.add_argument('-L', '--list-files', action='store_true', dest='ls',
-            help='List source code file names to {}.'.format(Default.si))
+            help='List source code files and generated files to different index files.')
     parser.add_argument('-P', '--copy-file', action='store_true', dest='cp',
             help='Copy source code file to output directory.')
     parser.add_argument('-o', '--output',
@@ -113,7 +116,7 @@ def ParseArguments(args):  # {{{
     parser.add_argument('--dump-only', action='store_true', dest='dump_only',
             help='Generate and dump commands to stdout only.')
     parser.add_argument('--ctu', action='store_true', dest='ctu',
-            help='Alias to -M -A -L.')
+            help='Alias to -A -E -L -M.')
     opts = parser.parse_args(args[1:])
 
     if opts.clang:
@@ -127,6 +130,7 @@ def ParseArguments(args):  # {{{
     if opts.ctu:
         opts.fm = True
         opts.ast = True
+        opts.i = True
         opts.ls = True
 
     return opts
@@ -139,6 +143,32 @@ def ParseArguments(args):  # {{{
 #   command: a compile command object in database
 def GetSourceFile(command):
     return os.path.abspath(os.path.join(command['directory'], command['file']))
+
+
+# GetCompilerAndExtension: generate the preprocessor compiler
+#                          and corresponding extension name.
+#
+#   opts: opts object (refer to ParseArguments)
+#   compiler: compiler name
+#   extension: list of extension names for [cc, cxx]
+def GetCompilerAndExtension(opts, compiler, extension):
+    # check suffix only as the compiler argument can be full path
+    if 'cc' == compiler[-2:]:
+        return opts.cc, extension[0]
+    elif 'c++' == compiler[-3:]:
+        return opts.cxx, extension[1]
+    else:
+        assert False, 'What is this compiler? ' + compiler
+
+
+# GetOutputName: generate the filename of the preprocessed file.
+#
+#   outputDir: output directory
+#   command: a compile command object in database
+#   extension: the extension name of the preprocessed file
+def GetOutputName(outputDir, command, extension):
+    return os.path.abspath(os.path.join(outputDir,
+        GetSourceFile(command)[1:]) + '.' + extension)
 
 
 # isCommandExecutable: check whether the command executable exists and is executable
@@ -170,18 +200,8 @@ def isCommandExecutable(cmd, opt):
 #           - directory: compiler working directory
 #           - output: directory of -o parameter
 def MakeCommand(opts, command, extension, prefix, suffix, argfilter):
-    # GenerateCompilerAndExtension: generate the preprocessor compiler
-    #                               and corresponding extension name.
-    def GenerateCompilerAndExtension(compiler, extension):
-        # check suffix only as the compiler argument can be full path
-        if 'cc' == compiler[-2:]:
-            return opts.cc, extension[0]
-        elif 'c++' == compiler[-3:]:
-            return opts.cxx, extension[1]
-        else:
-            assert False, 'What is this compiler? ' + compiler
-    compiler, extension = GenerateCompilerAndExtension(
-            command['arguments'][0], extension)
+    compiler, extension = GetCompilerAndExtension(
+            opts, command['arguments'][0], extension)
     arguments = [compiler]
 
     # append additional arguments for generating targets
@@ -194,8 +214,7 @@ def MakeCommand(opts, command, extension, prefix, suffix, argfilter):
     arguments += argfilter(command['arguments'][1:])
 
     # generate the full path of output file with file type extension
-    output = os.path.abspath(os.path.join(opts.output,
-        GetSourceFile(command)[1:]) + '.' + extension)
+    output = GetOutputName(opts.output, command, extension)
     arguments += ['-o', output]
 
     # append additional arguments for generating targets
@@ -290,12 +309,30 @@ def GenerateSourceFileList(opts, jobs):
     if opts.dump_only:
         return
 
-    print('Generating {}.'.format(Default.si))
+    def WriteListToFile(name, index):
+        name = os.path.abspath(os.path.join(opts.output, name))
+        print('Generating "{}".'.format(name))
 
-    with open(Default.srcidx, 'w') as fout:
-        for i in jobs:
-            fout.write(os.path.abspath(os.path.join(i['directory'], i['file'])))
-            fout.write('\n')
+        with open(name, 'w') as fout:
+            for i in index:
+                fout.write(i)
+                fout.write('\n')
+
+    WriteListToFile('source-index.txt', [GetSourceFile(i) for i in jobs])
+
+    def WriteGeneratedFileListToFile(name, extension):
+        WriteListToFile(name + '-index.txt',
+                [GetOutputName(opts.output, i,
+                    GetCompilerAndExtension(opts, i['arguments'][0], extension)[1])
+                    for i in jobs])
+    if opts.ast:
+        WriteGeneratedFileListToFile('ast', Default.astext)
+    if opts.i:
+        WriteGeneratedFileListToFile('i', Default.iext)
+    if opts.ll:
+        WriteGeneratedFileListToFile('ll', Default.llext)
+    if opts.bc:
+        WriteGeneratedFileListToFile('bc', Default.bcext)
 
 
 # PreprocessProject: monitor and control the process of preprocess
@@ -345,22 +382,22 @@ def PreprocessProject(opts):
         # jobRun:
         if opts.ast:
             commands.append(MakeCommand(
-                opts, job, ['ast', 'ast'], ['-emit-ast'], ['-w'],
+                opts, job, Default.astext, ['-emit-ast'], ['-w'],
                 getArgFilter(Default.filterstr)))
 
         if opts.i:
             commands.append(MakeCommand(
-                opts, job, ['i', 'ii'], ['-E'], ['-w'],
+                opts, job, Default.iext, ['-E'], ['-w'],
                 getArgFilter(Default.filterstr)))
 
         if opts.ll:
             commands.append(MakeCommand(
-                opts, job, ['ll', 'll'], ['-c', '-g', '-emit-llvm', '-S'], ['-w'],
+                opts, job, Default.llext, ['-c', '-g', '-emit-llvm', '-S'], ['-w'],
                 getArgFilter(Default.filterstr)))
 
         if opts.bc:
             commands.append(MakeCommand(
-                opts, job, ['bc', 'bc'], ['-c', '-g', '-emit-llvm'], ['-w'],
+                opts, job, Default.bcext, ['-c', '-g', '-emit-llvm'], ['-w'],
                 getArgFilter(Default.filterstr)))
 
         if opts.cp:
