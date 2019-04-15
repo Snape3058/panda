@@ -17,7 +17,7 @@ class Default:  # {{{
     i = 'C/C++ preprocessed file'
     ll = 'LLVM IR file'
     bc = 'LLVM BitCode file'
-    fm = 'Clang function-mapping file'
+    fm = 'Clang External Function Mapping file'
     si = 'source code index file'
     filterstr = [
             '-o:',
@@ -103,6 +103,9 @@ def ParseArguments(args):  # {{{
     parser.add_argument('-m', '--cfm',
             type=str, dest='cfm', default=Default.cfm,
             help='Customize the function mapping scanner. (default is clang-func-mapping)')
+    parser.add_argument('--fm-name',
+            type=str, dest='fmname', default=Default.fmname,
+            help='Customize the output filename of the {}. (default is externalFnMap.txt)'.format(Default.fm))
     parser.add_argument('-p', '--clang-path', metavar='CLANG_PATH', type=str, dest='clang',
             help='Customize the Clang executable directory for searching compilers.')
     parser.add_argument('-j', '--jobs', type=int, dest='jobs', default=1,
@@ -114,12 +117,12 @@ def ParseArguments(args):  # {{{
     opts = parser.parse_args(args[1:])
 
     if opts.clang:
-        if Default.cc == opts.cc:
-            opts.cc = os.path.abspath(os.path.join(opts.clang, Default.cc))
-        if Default.cxx == opts.cxx:
-            opts.cxx = os.path.abspath(os.path.join(opts.clang, Default.cxx))
-        if Default.cfm == opts.cfm:
-            opts.cfm = os.path.abspath(os.path.join(opts.clang, Default.cfm))
+        # If cc, cxx and cfm are set with full path, the settings will be used.
+        # Otherwise, it will be merged with clang path.
+        # Function os.path.join will handle this feature.
+        opts.cc = os.path.abspath(os.path.join(opts.clang, opts.cc))
+        opts.cxx = os.path.abspath(os.path.join(opts.clang, opts.cxx))
+        opts.cfm = os.path.abspath(os.path.join(opts.clang, opts.cfm))
 
     if opts.ctu:
         opts.fm = True
@@ -258,7 +261,7 @@ def GenerateFunctionMappingList(opts, jobs):
     src = [GetSourceFile(i) for i in jobs]
     path = os.path.dirname(opts.input)
     arguments = [opts.cfm, '-p', path] + src
-    outfile = os.path.join(opts.output, Default.fmname)
+    outfile = os.path.join(opts.output, opts.fmname)
 
     if opts.dump_only:
         print(' \\\n\t'.join(arguments) + ' | \\\n' +
