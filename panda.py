@@ -170,16 +170,19 @@ def isCommandExecutable(cmd, opt):
 #           - directory: compiler working directory
 #           - output: directory of -o parameter
 def MakeCommand(opts, command, extension, prefix, suffix, argfilter):
-    # GenerateCompiler: generate the preprocessor compiler
-    def GenerateCompiler(compiler):
+    # GenerateCompilerAndExtension: generate the preprocessor compiler
+    #                               and corresponding extension name.
+    def GenerateCompilerAndExtension(compiler, extension):
         # check suffix only as the compiler argument can be full path
         if 'cc' == compiler[-2:]:
-            return opts.cc
+            return opts.cc, extension[0]
         elif 'c++' == compiler[-3:]:
-            return opts.cxx
+            return opts.cxx, extension[1]
         else:
             assert False, 'What is this compiler? ' + compiler
-    arguments = [GenerateCompiler(command['arguments'][0])]
+    compiler, extension = GenerateCompilerAndExtension(
+            command['arguments'][0], extension)
+    arguments = [compiler]
 
     # append additional arguments for generating targets
     arguments += prefix
@@ -342,22 +345,22 @@ def PreprocessProject(opts):
         # jobRun:
         if opts.ast:
             commands.append(MakeCommand(
-                opts, job, 'ast', ['-emit-ast'], ['-w'],
+                opts, job, ['ast', 'ast'], ['-emit-ast'], ['-w'],
                 getArgFilter(Default.filterstr)))
 
         if opts.i:
             commands.append(MakeCommand(
-                opts, job, 'i', ['-E'], ['-w'],
+                opts, job, ['i', 'ii'], ['-E'], ['-w'],
                 getArgFilter(Default.filterstr)))
 
         if opts.ll:
             commands.append(MakeCommand(
-                opts, job, 'll', ['-c', '-g', '-emit-llvm', '-S'], ['-w'],
+                opts, job, ['ll', 'll'], ['-c', '-g', '-emit-llvm', '-S'], ['-w'],
                 getArgFilter(Default.filterstr)))
 
         if opts.bc:
             commands.append(MakeCommand(
-                opts, job, 'bc', ['-c', '-g', '-emit-llvm'], ['-w'],
+                opts, job, ['bc', 'bc'], ['-c', '-g', '-emit-llvm'], ['-w'],
                 getArgFilter(Default.filterstr)))
 
         if opts.cp:
