@@ -8,6 +8,7 @@ import argparse
 from subprocess import Popen as popen
 from subprocess import PIPE as pipe
 import re
+import shlex
 
 
 # default configurations and strings
@@ -410,7 +411,12 @@ def PreprocessProject(opts):
     if not os.path.exists(opts.output):
         os.makedirs(opts.output)
 
+    # convert 'command' to 'arguments'
     jobList = json.load(open(opts.input, 'r'))
+    for i in jobList:
+        if 'command' in i:
+            i['arguments'] = shlex.split(i['command'])
+            i.pop('command')
 
     # Do sequential job:
     # Generate function mapping list
