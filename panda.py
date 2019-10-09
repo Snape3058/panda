@@ -37,7 +37,7 @@ class Default:  # {{{
     Now = '%REPLACE_NOW%'
     cc = 'clang'
     cxx = 'clang++'
-    cfm = 'clang-func-mapping'
+    cfm = 'clang-extdef-mapping'
     fmname = 'externalFnMap.txt'
 
     # program description
@@ -130,8 +130,6 @@ def ParseArguments(args):  # {{{
     if opts.ctu:
         opts.fm = True
         opts.ast = True
-        opts.i = True
-        opts.ls = True
 
     return opts
 
@@ -287,12 +285,12 @@ def GenerateFunctionMappingList(opts, jobs):
 
     if opts.dump_only:
         print(' \\\n\t'.join(arguments) + ' | \\\n' +
-                "\tsed 's/$/.ast/g' >" + outfile)
+                "\tsed \"s/$/.ast/g;s/ / `pwd`/g\" >" + outfile)
         return
 
     process = popen(arguments, stdout=pipe, stderr=pipe)
     (out, err) = process.communicate()
-    fm = out.decode('utf-8').replace('\n', '.ast\n')
+    fm = out.decode('utf-8').replace(' ', ' ' + os.getcwd()).replace('\n', '.ast\n')
 
     with open(outfile, 'w') as fout:
         fout.write(fm)
