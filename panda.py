@@ -152,9 +152,9 @@ def GetSourceFile(command):
 #   extension: list of extension names for [cc, cxx]
 def GetCompilerAndExtension(opts, compiler, extension):
     # check suffix only as the compiler argument can be full path
-    if 'cc' == compiler[-2:]:
+    if 'cc' == compiler[-2:] or 'clang' == compiler[-5:]:
         return opts.cc, extension[0]
-    elif 'c++' == compiler[-3:]:
+    elif '++' == compiler[-2:]:
         return opts.cxx, extension[1]
     else:
         assert False, 'What is this compiler? ' + compiler
