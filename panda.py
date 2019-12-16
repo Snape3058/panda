@@ -291,7 +291,7 @@ def GenerateFunctionMappingList(opts, jobs):
 
     process = popen(arguments, stdout=pipe, stderr=pipe)
     (out, err) = process.communicate()
-    fm = out.decode('utf-8').replace(' ', ' ' + os.getcwd()).replace('\n', '.ast\n')
+    fm = out.decode('utf-8').replace(' /', ' ').replace('\n', '.ast\n')
 
     with open(outfile, 'w') as fout:
         fout.write(fm)
