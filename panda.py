@@ -132,6 +132,10 @@ def ParseArguments(args):  # {{{
         opts.fm = True
         opts.ast = True
 
+    opts.output = os.path.abspath(opts.output)
+    if not os.path.exists(opts.output):
+        os.makedirs(opts.output)
+
     return opts
 
     # }}}
@@ -334,10 +338,24 @@ def GenerateSourceFileList(opts, jobs):
         WriteGeneratedFileListToFile('bc', Default.bcext)
 
 
+# LoadCompilationDatabase: load CompilationDatabase from input file
+#
+#   opts: opts object (refer to ParseArguments)
+def LoadCompilationDatabase(opts):
+    jobList = json.load(open(opts.input, 'r'))
+    # convert 'command' to 'arguments'
+    for i in jobList:
+        if 'command' in i:
+            i['arguments'] = shlex.split(i['command'])
+            i.pop('command')
+    return jobList
+
+
 # PreprocessProject: monitor and control the process of preprocess
 #
 #   opts: opts object (refer to ParseArguments)
-def PreprocessProject(opts):
+#   jobList: compile commands
+def PreprocessProject(opts, jobList):
     def jobRun(opts, job):  # {{{
         commands = []
 
@@ -408,15 +426,8 @@ def PreprocessProject(opts):
         # }}}
 
     # PreprocessProject:
-    if not os.path.exists(opts.output):
-        os.makedirs(opts.output)
-
-    # convert 'command' to 'arguments'
-    jobList = json.load(open(opts.input, 'r'))
-    for i in jobList:
-        if 'command' in i:
-            i['arguments'] = shlex.split(i['command'])
-            i.pop('command')
+    if not jobList:
+        return
 
     # Do sequential job:
     # Generate function mapping list
@@ -445,7 +456,8 @@ def PreprocessProject(opts):
 
 def main(args):
     opts = ParseArguments(args)
-    PreprocessProject(opts)
+    CompilationDatabase = LoadCompilationDatabase(opts)
+    PreprocessProject(opts, CompilationDatabase)
 
 
 if '__main__' == __name__:
