@@ -9,11 +9,24 @@ from subprocess import Popen as popen
 from subprocess import PIPE as pipe
 import re
 import shlex
+from ctypes import cdll
+import time
+from collections import namedtuple
+
+ExecCommands = namedtuple('ExecCommands',
+        ['method', 'ppid', 'pid', 'pwd', 'arguments'])
+CompilingCommands = namedtuple('CompilingCommands',
+        ['compiler', 'directory', 'files', 'arguments', 'output', 'oindex', 'compilation'])
+LinkingCommands = namedtuple('LinkingCommands',
+        ['linker', 'directory', 'files', 'arguments', 'output', 'oindex', 'archive'])
 
 
 # default configurations and strings
 class Default:  # {{{
     # configurable names, tags, and other strings
+    panda = os.path.abspath(os.path.realpath(__file__))
+    pandadir = os.path.dirname(panda)
+    execdir = os.getcwd()
     ast = 'Clang PCH file'
     i = 'C/C++ preprocessed file'
     ll = 'LLVM IR file'
@@ -40,6 +53,14 @@ class Default:  # {{{
     cxx = 'clang++'
     cfm = 'clang-extdef-mapping'
     fmname = 'externalFnMap.txt'
+    libname = 'libpanda.so'
+    sourcefilter = re.compile('^[^-].*\.(c|C|cc|CC|cxx|cpp|c\+\+|i|ii|ixx|ipp|i\+\+)')
+    asmfilter = re.compile("^[^-].*\.(s|S|sx|asm)$")
+    objectfilter = re.compile('^[^-].*\.(o|obj)$')
+    sharedfilter = re.compile('^[^-].*\.(so([\d.]+)?|dll)$')
+    archivefilter = re.compile('^[^-].*\.(a|lib)$')
+    libraryfilter = re.compile('^[^-].*\.(so([\d.]+)?|dll|a|lib)$')
+    linksourcefilter = re.compile('^[^-].*\.(o|obj|so([\d.]+)?|dll|a|lib)$')
 
     # program description
     DescriptionMsg = '''Generate preprocessed files from compilation database.
@@ -78,6 +99,10 @@ def ParseArguments(args):  # {{{
     parser.add_argument('-v', '--version', action='version', version=Default.VersionMsg)
     parser.add_argument('-V', '--verbose', action='store_true', dest='verbose',
             help='Verbose output mode.')
+    parser.add_argument('-b', '--build', action='store_true', dest='build',
+            help='Build the project and catch the compilation database.')
+    parser.add_argument('commands', nargs='*',
+            help='Commands executed to build the project.')
     parser.add_argument('-A', '--generate-ast', action='store_true', dest='ast',
             help='Generate {}.'.format(Default.ast))
     parser.add_argument('-E', '--generate-i', action='store_true', dest='i',
@@ -131,6 +156,10 @@ def ParseArguments(args):  # {{{
     if opts.ctu:
         opts.fm = True
         opts.ast = True
+
+    if opts.build and not opts.commands:
+        # -b, --build is provided without any arguments
+        opts.commands = ['make']
 
     opts.output = os.path.abspath(opts.output)
     if not os.path.exists(opts.output):
@@ -454,9 +483,308 @@ def PreprocessProject(opts, jobList):
         pool.wait()
 
 
+class Filter:
+    FilterType = namedtuple('FilterType',
+            ['execfilter', 'abort', 'remove', 'output', 'source'])
+    ParameterType = namedtuple('ParameterType', ['matcher', 'count'])
+
+    def __init__(self, filters):
+        self.filters = filters
+        self.exe = None
+        self.files = None
+        self.arguments = None
+        self.output = None
+
+    @staticmethod
+    def MatchParameter(matcher, count, arg, i):
+        match = matcher.match(arg)
+        if not match:
+            return None
+        ret = [match.group(0)]
+        if match.group(0) != arg:
+            ret.append(arg[match.end():])
+            count -= 1
+        for _ in range(count):
+            ret.append(next(i))
+        return ret
+
+    def MatchExec(self, exe):
+        exe = os.path.basename(exe)
+        for ef in self.filters.execfilter:
+            if ef.fullmatch(exe):
+                return exe
+        return None
+
+    def MatchAbort(self, arg):
+        return arg in self.filters.abort
+
+    def MatchRemove(self, arg, i):
+        for rm in self.filters.remove:
+            match = Filter.MatchParameter(rm.matcher, rm.count, arg, i)
+            if match:
+                return True
+        return False
+
+    def MatchOutput(self, arg, i):
+        return Filter.MatchParameter(self.filters.output.matcher,
+                self.filters.output.count, arg, i)
+
+    def MatchSource(self, arg, pwd):
+        arg = os.path.join(pwd, arg)
+        match = self.filters.source.match(os.path.basename(arg))
+        return arg if match and (os.path.exists(arg) or arg.startswith('/tmp/')) else None
+
+    def ParseExecutionCommands(self, exe):
+        args = iter(exe.arguments)
+        if not self.MatchExec(next(args)):
+            return None
+        self.exe = exe.arguments[0]
+        self.pwd = exe.pwd
+        self.files = list()
+        self.arguments = list()
+        self.output = None
+        for arg in args:
+            if self.filters.abort and self.MatchAbort(arg):
+                return None
+            if not self.filters.remove or not self.MatchRemove(arg, args):
+                if self.filters.output:
+                    target = self.MatchOutput(arg, args)
+                    if target:
+                        self.output = os.path.join(exe.pwd, target[-1])
+                        if 1 != len(target):
+                            self.arguments += target[:-1]
+                        self.arguments.append(self.output)
+                        continue
+                if self.filters.source:
+                    src = self.MatchSource(arg, exe.pwd)
+                    if src:
+                        self.files.append(src)
+                        self.arguments.append(src)
+                        continue
+                # finally: add all un-matched arguments
+                self.arguments.append(arg)
+        return (self.exe, self.pwd, self.files, self.arguments, self.output,
+                self.arguments.index(self.output) if self.output else None)
+
+
+class CC1Filter(Filter):
+    cc1filter = [re.compile('^([\w-]*g?cc|[\w-]*[gc]\+\+|clang(\+\+)?)(-[\d.]+)?$')]
+    cc1abort = ['-E', '-cc1', '-cc1as', '-M', '-MM', '-###', '-fsyntax-only']
+    cc1remove = [Filter.ParameterType(re.compile('^-[lL]'), 1),
+            Filter.ParameterType(re.compile('^-(Wl,|Werror|Wall|M.?|shared|static)'), 0)]
+    cc1output = Filter.ParameterType(re.compile('^-o'), 1)
+    cc1source = Default.sourcefilter
+
+    def __init__(self):
+        super().__init__(Filter.FilterType(
+            execfilter=CC1Filter.cc1filter, abort=CC1Filter.cc1abort,
+            remove=CC1Filter.cc1remove, output=CC1Filter.cc1output,
+            source=CC1Filter.cc1source))
+
+    @staticmethod
+    def MatchArguments(exe):
+        Self = CC1Filter()
+        result = Self.ParseExecutionCommands(exe)
+        return CompilingCommands(compiler=result[0], directory=result[1],
+                files=result[2], arguments=result[3], output=result[4],
+                oindex=result[5], compilation='-c' in result[3]) if result else None
+
+
+class ARFilter(Filter):
+    arfilter = [re.compile('^[\w-]*ar(-[\d.]+)?$')]
+    aroutput = Default.archivefilter
+    arsource = Default.objectfilter
+
+    def __init__(self):
+        super().__init__(Filter.FilterType(
+            execfilter=ARFilter.arfilter, abort=None, remove=None,
+            output=ARFilter.aroutput, source=ARFilter.arsource))
+
+    def MatchOutput(self, arg, i):
+        return [arg] if self.filters.output.match(arg) else None
+
+    @staticmethod
+    def MatchArguments(exe):
+        Self = ARFilter()
+        result = Self.ParseExecutionCommands(exe)
+        return LinkingCommands(linker=result[0], directory=result[1],
+                files=result[2], arguments=result[3], output=result[4],
+                oindex=result[5], archive=True) if result else None
+
+
+
+class LDFilter(Filter):
+    ldfilter = [re.compile('^[\w-]*ld(-[\d.]+)?$')]
+    ldoutput = Filter.ParameterType(re.compile('^-o'), 1)
+    ldsource = Default.linksourcefilter
+
+    def __init__(self):
+        super().__init__(Filter.FilterType(
+            execfilter=LDFilter.ldfilter, abort=None, remove=None,
+            output=LDFilter.ldoutput, source=LDFilter.ldsource))
+
+    @staticmethod
+    def MatchArguments(exe):
+        Self = LDFilter()
+        result = Self.ParseExecutionCommands(exe)
+        return LinkingCommands(linker=result[0], directory=result[1],
+                files=result[2], arguments=result[3], output=result[4],
+                oindex=result[5], archive=False) if result else None
+
+class AliasFilter:
+    AliasFilterType = namedtuple('AliasFilterType', ['exe', 'input', 'output'])
+    clangfilter = AliasFilterType(re.compile("^clang(-[\d.]+)?$"),
+            re.compile("^-main-file-name$"), re.compile("^-o"))
+    cc1filter = AliasFilterType(re.compile("^[\w-]*cc1(plus)?(-[\d.]+)?$"),
+            re.compile("^-dumpbase$"), re.compile("^-o"))
+    asfilter = AliasFilterType(re.compile("^[\w-]*as(-[\d.]+)?$"),
+            Default.asmfilter, re.compile("^-o"))
+
+    @staticmethod
+    def MatchArguments(exe):
+        argfilter, ifile, ofile = None, None, None
+        args = iter(exe.arguments)
+        exename = os.path.basename(next(args))
+        if AliasFilter.clangfilter.exe.match(exename) and '-cc1' == next(args):
+            argfilter = AliasFilter.clangfilter
+        elif AliasFilter.cc1filter.exe.match(exename):
+            argfilter = AliasFilter.cc1filter
+        elif AliasFilter.asfilter.exe.match(exename):
+            argfilter = AliasFilter.asfilter
+        if not argfilter:
+            return None
+        for i in args:
+            imatch, omatch = argfilter.input.match(i), argfilter.output.match(i)
+            if imatch:
+                ifile = next(args) if '-' == imatch.group(0)[0] else imatch.group(0)
+            elif omatch:
+                ofile = next(args) if '-' == omatch.group(0)[0] else omatch.group(0)
+        return {os.path.join(exe.pwd, ifile): [os.path.join(exe.pwd, ofile)]} \
+                if ifile and ofile else None
+
+
+def CatchCompilationDatabase(opts):
+    def BuildProject(opts):
+        print('Compiling the project: ' + ' '.join(opts.commands))
+        libfile = os.path.join(Default.pandadir, Default.libname)
+        outputdir = os.path.abspath(os.path.join(opts.output,
+                time.strftime("%Y%m%d_%H%M%S.build", time.localtime())))
+        os.makedirs(outputdir)
+
+        environ = os.environ.copy()
+        environ['LD_PRELOAD'] = libfile
+        environ['PANDA_TEMPORARY_OUTPUT_DIR'] = outputdir
+        popen(opts.commands, env=environ).wait()
+
+        return outputdir
+
+    def SimplifyAlias(AD):
+        ret = dict()
+        for src in AD:
+            if Default.sourcefilter.match(src):
+                ret[src] = list()
+                for value in AD[src]:
+                    if not Default.objectfilter.match(value):
+                        value = AD[value].pop()
+                    if value.startswith('/tmp/'):
+                        ret[value] = src + '.' + os.path.basename(value)
+                        value = ret[value]
+                    else:
+                        ret[value] = value
+                    ret[src].append(value)
+            elif not Default.asmfilter.match(src):
+                ret[src] = AD[src]
+        return ret
+
+    def ConstructCompilationDatabase(CD, AD):
+        ret = list()
+        for cmd in CD:
+            for ifile in cmd.files:
+                arguments = [cmd.compiler] + cmd.arguments
+                output = AD[cmd.output]
+                if isinstance(output, list):
+                    for out in AD[cmd.output]:
+                        if out in AD and AD[out] in AD[ifile]:
+                            output = AD[out]
+                            break
+                arguments[cmd.oindex + 1] = output
+                for rfile in cmd.files:
+                    if rfile == ifile:
+                        if not cmd.compilation:
+                            arguments.insert(arguments.index(rfile), '-c')
+                    else:
+                        arguments.remove(rfile)
+                ret.append({'directory': cmd.directory, 'file': ifile,
+                    'arguments': arguments, 'output': output})
+        with open(os.path.join(opts.output, 'compile_commands.json'), 'w') as f:
+            json.dump(ret, f, indent=4)
+        return ret
+
+    def ConstructLinkingDatabase(LD, AD):
+        ret = list()
+        for cmd in LD:
+            for ifile in cmd.files.copy():
+                if ifile in AD:
+                    cmd.arguments[cmd.arguments.index(ifile)] = AD[ifile]
+                    cmd.files[cmd.files.index(ifile)] = AD[ifile]
+                else:
+                    cmd.files.remove(ifile)
+            ret.append({'directory': cmd.directory, 'files': cmd.files,
+                'arguments': [cmd.linker] + cmd.arguments, 'output': cmd.output})
+        with open(os.path.join(opts.output, 'link_commands.json'), 'w') as f:
+            json.dump(ret, f, indent=4)
+        return ret
+
+    def HandleCompileCommands(outputdir):
+        def TraverseCommands(outputdir):
+            for outputdir, dirs, files in os.walk(outputdir):
+                for i in files:
+                    i = os.path.join(outputdir, i)
+                    yield json.load(open(i, 'r'))
+
+        print('Generating "compile_commands.json" and "link_commands.json".')
+        CompilationDatabase = list()
+        LinkingDatabase = list()
+        AliasDatabase = dict()
+        for i in TraverseCommands(outputdir):
+            exe = ExecCommands(**i)
+            cd = CC1Filter.MatchArguments(exe)
+            if cd and cd.files:
+                CompilationDatabase.append(cd)
+                continue
+            ar = ARFilter.MatchArguments(exe)
+            if ar and ar.files:
+                LinkingDatabase.append(ar)
+                continue
+            ld = LDFilter.MatchArguments(exe)
+            if ld and ld.files:
+                LinkingDatabase.append(ld)
+                AliasDatabase[ld.output] = ld.files
+                continue
+            al = AliasFilter.MatchArguments(exe)
+            if al:
+                for k in al:
+                    if k in AliasDatabase:
+                        AliasDatabase[k] += al[k]
+                    else:
+                        AliasDatabase[k] = al[k]
+                continue
+        AliasDatabase = SimplifyAlias(AliasDatabase)
+        CDJson = ConstructCompilationDatabase(CompilationDatabase, AliasDatabase)
+        LDJson = ConstructLinkingDatabase(LinkingDatabase, AliasDatabase)
+        with open(os.path.join(outputdir, 'name_mapping.json'), 'w') as f:
+            json.dump(AliasDatabase, f, indent=4)
+        return (CompilationDatabase, LinkingDatabase, AliasDatabase, CDJson, LDJson)
+
+    # CatchCompilationDatabase:
+    CD, LD, AD, CJ, LJ = HandleCompileCommands(BuildProject(opts))
+    return CJ
+
+
 def main(args):
     opts = ParseArguments(args)
-    CompilationDatabase = LoadCompilationDatabase(opts)
+    CompilationDatabase = CatchCompilationDatabase(opts) if opts.build \
+            else LoadCompilationDatabase(opts)
     PreprocessProject(opts, CompilationDatabase)
 
 
