@@ -139,8 +139,6 @@ def ParseArguments(args):  # {{{
             help='Customize the Clang executable directory for searching compilers.')
     parser.add_argument('-j', '--jobs', type=int, dest='jobs', default=1,
             help='Customize the number of jobs allowed in parallel.')
-    parser.add_argument('--dump-only', action='store_true', dest='dump_only',
-            help='Generate and dump commands to stdout only.')
     parser.add_argument('--ctu', action='store_true', dest='ctu',
             help='Alias to -A -E -L -M.')
     opts = parser.parse_args(args[1:])
@@ -276,20 +274,13 @@ def MakeCopyCommand(opts, command):
 #
 #   command: the command object to be executed. (in the parsed JSON format)
 #   verbose: dump the command to be executed.
-#   dump_only: dump and exit, do not execute.
-def RunCommand(command, verbose, dump_only):
-    if not dump_only:
-        print('Generating "' + command['output'] + '"')
+def RunCommand(command, verbose):
+    print('Generating "' + command['output'] + '"')
 
     arguments = command['arguments']
     outputDir = os.path.dirname(command['output'])
 
-    if dump_only:
-        print('mkdir -p ' + outputDir)
-        print('cd ' + command['directory'])
-        print(' \\\n\t'.join(arguments))
-        return
-    elif verbose:
+    if verbose:
         print(arguments)
 
     # create directory for output file
@@ -309,18 +300,12 @@ def RunCommand(command, verbose, dump_only):
 #   opts: opts object (refer to ParseArguments)
 #   jobs: the compilation database
 def GenerateFunctionMappingList(opts, jobs):
-    if not opts.dump_only:
-        print('Generating function mapping list.')
+    print('Generating function mapping list.')
 
     src = [GetSourceFile(i) for i in jobs]
     path = os.path.dirname(opts.input)
     arguments = [opts.cfm, '-p', path] + src
     outfile = os.path.join(opts.output, opts.fmname)
-
-    if opts.dump_only:
-        print(' \\\n\t'.join(arguments) + ' | \\\n' +
-                "\tsed \"s/$/.ast/g;s/ / `pwd`/g\" >" + outfile)
-        return
 
     process = popen(arguments, stdout=pipe, stderr=pipe)
     (out, err) = process.communicate()
@@ -333,14 +318,10 @@ def GenerateFunctionMappingList(opts, jobs):
 
 
 # GenerateSourceFileList: dump all TU to an index file.
-#   NOTE: Do nothing when dump_only.
 #
 #   opts: opts object (refer to ParseArguments)
 #   jobs: the compilation database
 def GenerateSourceFileList(opts, jobs):
-    if opts.dump_only:
-        return
-
     def WriteListToFile(name, index):
         name = os.path.abspath(os.path.join(opts.output, name))
         print('Generating "{}".'.format(name))
@@ -450,7 +431,7 @@ def PreprocessProject(opts, jobList):
             commands.append(MakeCopyCommand(opts, job))
 
         for cmd in commands:
-            RunCommand(cmd, opts.verbose, opts.dump_only)
+            RunCommand(cmd, opts.verbose)
 
         # }}}
 
