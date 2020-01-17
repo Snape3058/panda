@@ -9,7 +9,7 @@ from subprocess import Popen as popen
 from subprocess import PIPE as pipe
 import re
 import shlex
-from ctypes import cdll
+from ctypes import CDLL as openso
 import time
 from collections import namedtuple
 import textwrap
@@ -47,7 +47,6 @@ class Default:  # {{{
             ]
     Version = '2.0'
     Commit = '%REPLACE_COMMIT_INFO%'
-    Now = '%REPLACE_NOW%'
     cc = 'clang'
     cxx = 'clang++'
     cfm = 'clang-extdef-mapping'
@@ -81,12 +80,33 @@ arguments below.''',
                 width=80, break_long_words=False, break_on_hyphens=False
                 )
             )
-
     # program version info
-    VersionMsg = '\n'.join([
-        'panda {} ({})', 'Provided by REST team, ISCAS.',
-        'Copyright 2018-{}. All rights reserved.']).format(
-            Version, Commit, Now)
+    VersionMsg = ''
+
+    @staticmethod
+    def getVersionMsg():
+        if Default.VersionMsg:
+            return Default.VersionMsg
+
+        ret = ['Panda {} (Python 3)'.format(Default.Version),
+                'git checkout: {}'.format(Default.Commit)]
+        pin, pout = os.pipe()
+        if 0 == os.fork():
+            os.dup2(pout, 1)
+            os.dup2(pout, 2)
+            os.environ['LD_PRELOAD'] = Default.libpath
+            os.environ['PANDA_TEMPORARY_OUTPUT_DIR'] = os.getcwd()
+            openso(Default.libpath).version()
+            exit(0)
+        os.close(pout)
+        pin = os.fdopen(pin, 'r', -1)
+        while True:
+            data = pin.readline()
+            if not data:
+                break
+            ret.append(data.strip())
+        Default.VersionMsg = '\n'.join(ret)
+        return Default.VersionMsg
 
     # }}}
 
@@ -95,7 +115,8 @@ arguments below.''',
 def ParseArguments(args):  # {{{
     parser = argparse.ArgumentParser(description=Default.DescriptionMsg,
             formatter_class=argparse.RawTextHelpFormatter)
-    parser.add_argument('-v', '--version', action='version', version=Default.VersionMsg)
+    parser.add_argument('-v', '--version', action='version',
+            version=Default.getVersionMsg())
     parser.add_argument('-V', '--verbose', action='store_true', dest='verbose',
             help='Verbose output mode.')
     parser.add_argument('-b', '--build', action='store_true', dest='build',

@@ -9,7 +9,6 @@ BRANCH := $(shell git rev-parse --abbrev-ref HEAD)
 COMMIT := $(shell git rev-parse HEAD)
 COMPILER := $(shell gcc --version | head -n 1)
 SYSTEM := $(shell uname -srm)
-YEAR := $(shell date +%Y)
 TIME := $(shell date +%Y%m%d-%H%M)
 OWNER := $(shell ls -l panda.py |awk '{print $$3}')
 
@@ -26,7 +25,7 @@ libpanda.so: panda.c
 
 # install required files
 install: panda.py libpanda.so
-	sudo -u ${OWNER} sed -i 's/%REPLACE_COMMIT_INFO%/$(BRANCH) - $(COMMIT)/g;s/%REPLACE_NOW%/$(YEAR)/g' panda.py
+	sudo -u ${OWNER} sed -i 's/%REPLACE_COMMIT_INFO%/$(BRANCH) - $(COMMIT)/g' panda.py
 	install -d $(PREFIX)$(DESTDIR)
 	install -m 755 panda.py $(PREFIX)$(DESTDIR)/panda
 	install -m 755 libpanda.so $(PREFIX)$(DESTDIR)/panda
