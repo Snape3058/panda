@@ -714,8 +714,8 @@ def CatchCompilationDatabase(opts):
                             arguments.insert(arguments.index(rfile), '-c')
                     else:
                         arguments.remove(rfile)
-                ret.append({'directory': cmd.directory, 'file': ifile,
-                    'arguments': arguments, 'output': output})
+                ret.append({'output': output, 'directory': cmd.directory,
+                    'file': ifile, 'arguments': arguments})
         with open(os.path.join(opts.output, 'compile_commands.json'), 'w') as f:
             json.dump(ret, f, indent=4)
         return ret
@@ -723,14 +723,30 @@ def CatchCompilationDatabase(opts):
     def ConstructLinkingDatabase(LD, AD):
         ret = list()
         for cmd in LD:
+            objs, archs, sobjs = list(), list(), list()
             for ifile in cmd.files.copy():
                 if ifile in AD:
-                    cmd.arguments[cmd.arguments.index(ifile)] = AD[ifile]
-                    cmd.files[cmd.files.index(ifile)] = AD[ifile]
+                    if Default.objectfilter.match(ifile):
+                        objs.append(AD[ifile])
+                        cmd.arguments[cmd.arguments.index(ifile)] = AD[ifile]
+                        cmd.files[cmd.files.index(ifile)] = AD[ifile]
+                    elif Default.sharedfilter.match(ifile):
+                        sobjs.append(ifile)
+                    else:
+                        archs.append(ifile)
                 else:
                     cmd.files.remove(ifile)
-            ret.append({'directory': cmd.directory, 'files': cmd.files,
-                'arguments': [cmd.linker] + cmd.arguments, 'output': cmd.output})
+            if not objs and not archs and not sobjs:
+                continue
+            lo = {'output': cmd.output, 'directory': cmd.directory,
+                    'arguments': [cmd.linker] + cmd.arguments}
+            if objs:
+                lo['objects'] = objs
+            if archs:
+                lo['archives'] = archs
+            if sobjs:
+                lo['shareds'] = sobjs
+            ret.append(lo)
         with open(os.path.join(opts.output, 'link_commands.json'), 'w') as f:
             json.dump(ret, f, indent=4)
         return ret
@@ -755,6 +771,7 @@ def CatchCompilationDatabase(opts):
             ar = ARFilter.MatchArguments(exe)
             if ar and ar.files:
                 LinkingDatabase.append(ar)
+                AliasDatabase[ar.output] = ar.files
                 continue
             ld = LDFilter.MatchArguments(exe)
             if ld and ld.files:
