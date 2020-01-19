@@ -372,19 +372,6 @@ def GenerateSourceFileList(opts, jobs):
         WriteGeneratedFileListToFile('bc', ['bc', 'bc'])
 
 
-# LoadCompilationDatabase: load CompilationDatabase from input file
-#
-#   opts: opts object (refer to ParseArguments)
-def LoadCompilationDatabase(opts):
-    jobList = json.load(open(opts.compiling, 'r'))
-    # convert 'command' to 'arguments'
-    for i in jobList:
-        if 'command' in i:
-            i['arguments'] = shlex.split(i['command'])
-            i.pop('command')
-    return jobList
-
-
 # PreprocessProject: monitor and control the process of preprocess
 #
 #   opts: opts object (refer to ParseArguments)
@@ -800,6 +787,19 @@ def CatchCompilationDatabase(opts):
     # CatchCompilationDatabase:
     CD, LD, AD, CJ, LJ = HandleCompileCommands(BuildProject(opts))
     return CJ
+
+
+# LoadCompilationDatabase: load CompilationDatabase from input file
+#
+#   opts: opts object (refer to ParseArguments)
+def LoadCompilationDatabase(opts):
+    jobList = json.load(open(opts.compiling, 'r'))
+    # convert 'command' to 'arguments'
+    for i in jobList:
+        if 'command' in i:
+            i['arguments'] = shlex.split(i['command'])
+            i.pop('command')
+    return jobList
 
 
 def main(args):
