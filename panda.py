@@ -166,14 +166,7 @@ def ParseArguments(args):  # {{{
             help='Prepare for cross-TU analysis, (alias to -A and -M)')
     opts = parser.parse_args(args[1:])
 
-    if opts.clang:
-        # If cc, cxx and cfm are set with full path, the settings will be used.
-        # Otherwise, it will be merged with clang path.
-        # Function os.path.join will handle this feature.
-        opts.cc = os.path.abspath(os.path.join(opts.clang, opts.cc))
-        opts.cxx = os.path.abspath(os.path.join(opts.clang, opts.cxx))
-        opts.cfm = os.path.abspath(os.path.join(opts.clang, opts.cfm))
-
+    # set alias for --ctu
     if opts.ctu:
         opts.fm = True
         opts.ast = True
@@ -188,6 +181,36 @@ def ParseArguments(args):  # {{{
         os.makedirs(opts.output)
 
     return opts
+
+    # reset executable path for --clang-path
+    if opts.clang:
+        # If cc, cxx and cfm are set with full path, the settings will be used.
+        # Otherwise, it will be merged with clang path.
+        # Function os.path.join will handle this feature.
+        opts.cc = os.path.abspath(os.path.join(opts.clang, opts.cc))
+        opts.cxx = os.path.abspath(os.path.join(opts.clang, opts.cxx))
+        opts.cfm = os.path.abspath(os.path.join(opts.clang, opts.cfm))
+
+    # check whether the command executable exists and is executable
+    def isCommandExecutable(cmd, opt):
+        try:
+            popen([cmd, '--version'], stdout=pipe, stderr=pipe).wait()
+        except (FileNotFoundError, PermissionError) as err:
+            print('\n'.join(['Error:\tRequired tool "{}" not available.',
+                '\tPlease check your settings of "{}" or "--clang-path".',
+                'popen: {}']).format(
+                    os.path.basename(cmd), opt, err),
+                file=sys.stderr)
+            return False
+        return True
+
+    if opts.fm:
+        if not isCommandExecutable(opts.cfm, '--cfm'):
+            exit(1)
+    if opts.ast or opts.i or opts.ll or opts.bc:
+        if not isCommandExecutable(opts.cc, '--cc') or \
+                not isCommandExecutable(opts.cxx, '--cxx'):
+            exit(1)
 
     # }}}
 
@@ -223,21 +246,6 @@ def GetCompilerAndExtension(opts, compiler, extension):
 def GetOutputName(outputDir, command, extension):
     return os.path.abspath(os.path.join(outputDir,
         GetSourceFile(command)[1:]) + '.' + extension)
-
-
-# isCommandExecutable: check whether the command executable exists and is executable
-#
-#   cmd: path to command executable to be checked
-#   opt: the option of setting the command executable
-def isCommandExecutable(cmd, opt):
-    try:
-        popen([cmd, '--version'], stdout=pipe, stderr=pipe).wait()
-    except FileNotFoundError:
-        print('Error:\tRequired tool "{}" not available. \n'
-                '\tPlease check your settings of "{}" or "--clang-path".\n'.format(
-                    os.path.basename(cmd), opt), file=sys.stderr)
-        return False
-    return True
 
 
 # MakeCommand: replace the arguments with correct value for preprocess
@@ -452,7 +460,7 @@ def PreprocessProject(opts, jobList):
 
     # Do sequential job:
     # Generate function mapping list
-    if opts.fm and isCommandExecutable(opts.cfm, '--cfm'):
+    if opts.fm:
         GenerateFunctionMappingList(opts, jobList)
 
     # Generate source file list
@@ -460,9 +468,6 @@ def PreprocessProject(opts, jobList):
         GenerateSourceFileList(opts, jobList)
 
     # Do parallel job:
-    if not isCommandExecutable(opts.cc, '--cc') or not isCommandExecutable(opts.cxx, '--cxx'):
-        sys.exit(1)
-
     if 1 == opts.jobs:
         for i in jobList:
             jobRun(opts, i)
