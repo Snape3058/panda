@@ -192,25 +192,22 @@ def ParseArguments(args):  # {{{
         opts.cfm = os.path.abspath(os.path.join(opts.clang, opts.cfm))
 
     # check whether the command executable exists and is executable
-    def isCommandExecutable(cmd, opt):
+    def checkCommandExecutable(cmd, opt):
         try:
             popen([cmd, '--version'], stdout=pipe, stderr=pipe).wait()
-        except (FileNotFoundError, PermissionError) as err:
+        except OSError as err:
             print('\n'.join(['Error:\tRequired tool "{}" not available.',
                 '\tPlease check your settings of "{}" or "--clang-path".',
                 'popen: {}']).format(
                     os.path.basename(cmd), opt, err),
                 file=sys.stderr)
-            return False
-        return True
+            exit(err.errno)
 
     if opts.fm:
-        if not isCommandExecutable(opts.cfm, '--cfm'):
-            exit(1)
+        checkCommandExecutable(opts.cfm, '--cfm')
     if opts.ast or opts.i or opts.ll or opts.bc:
-        if not isCommandExecutable(opts.cc, '--cc') or \
-                not isCommandExecutable(opts.cxx, '--cxx'):
-            exit(1)
+        checkCommandExecutable(opts.cc, '--cc')
+        checkCommandExecutable(opts.cxx, '--cxx')
 
     # }}}
 
