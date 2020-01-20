@@ -145,6 +145,9 @@ def ParseArguments(args):  # {{{
     parser.add_argument('--compiling', metavar='<compile_commands.json>',
             type=str, dest='compiling', default=os.path.abspath('./compile_commands.json'),
             help='Customize the compiling database file.')
+    parser.add_argument('--linking', metavar='<link_commands.json>',
+            type=str, dest='linking', default=os.path.abspath('./link_commands.json'),
+            help='Customize the linking database file.')
     parser.add_argument('--cc',
             type=str, dest='cc', default=Default.cc,
             help='Customize the C compiler. (default is clang)')
