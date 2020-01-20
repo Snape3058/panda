@@ -20,6 +20,7 @@ CompilingCommands = namedtuple('CompilingCommands',
         ['compiler', 'directory', 'files', 'arguments', 'output', 'oindex', 'compilation'])
 LinkingCommands = namedtuple('LinkingCommands',
         ['linker', 'directory', 'files', 'arguments', 'output', 'oindex', 'archive'])
+LinkingAlias = namedtuple('LinkingAlias', ['output', 'objects', 'libraries'])
 
 
 # default configurations and strings
@@ -804,11 +805,10 @@ def CatchCompilationDatabase(opts):
         LDJson = ConstructLinkingDatabase(LinkingDatabase, AliasDatabase)
         with open(os.path.join(outputdir, 'name_mapping.json'), 'w') as f:
             json.dump(AliasDatabase, f, indent=4)
-        return (CompilationDatabase, LinkingDatabase, AliasDatabase, CDJson, LDJson)
+        return (CDJson, LDJson)
 
     # CatchCompilationDatabase:
-    CD, LD, AD, CJ, LJ = HandleCompileCommands(BuildProject(opts))
-    return CJ
+    return HandleCompileCommands(BuildProject(opts))
 
 
 class CC1JsonFilter(Filter):
@@ -855,24 +855,71 @@ class CC1JsonFilter(Filter):
         return Self.MatchExec(name)
 
 
-# LoadCompilationDatabase: load CompilationDatabase from input file
+# ParseCompilationCommands: parse the database objects
 #
 #   opts: opts object (refer to ParseArguments)
-def LoadCompilationDatabase(opts):
-    jobList = json.load(open(opts.compiling, 'r'))
-    # convert 'command' to 'arguments'
-    for i in jobList:
-        if 'command' in i:
-            i['arguments'] = shlex.split(i['command'])
-            i.pop('command')
-    return jobList
+def ParseCompilationCommands(CDList, LDList):
+    def ParseCDList(CDList):
+        if not CDList:
+            return None
+        cdret = dict()
+        for job in CDList:
+            # convert 'command' to 'arguments'
+            if 'command' in job:
+                job['arguments'] = shlex.split(job.pop('command'))
+            job['file'] = os.path.join(job['directory'], job['file'])
+            parsed = CC1JsonFilter.MatchArguments(job)
+            CC1Filter.reformatInputFile(job['file'], parsed.arguments, parsed.files,
+                    parsed.compilation)
+            cdret[parsed.output] = parsed
+        return cdret
+
+    def ParseLDList(LDList):
+        if not LDList:
+            return None
+        ldret = dict()
+        for job in LDList:
+            if 'command' in job:
+                job['arguments'] = shlex.split(job.pop('command'))
+            job['output'] = os.path.join(job['directory'], job['output'])
+            def joinDirectory(job, item):
+                if item in job:
+                    for i in range(len(job[item])):
+                        job[item][i] = os.path.join(job['directory'], job[item][i])
+            joinDirectory(job, 'objects')
+            joinDirectory(job, 'archives')
+            joinDirectory(job, 'shareds')
+            ldret[job['output']] = LinkingAlias(
+                    output = job['output'], objects = job['objects'],
+                    libraries = job['archives'] if 'archives' in job else [] + \
+                            job['shareds'] if 'shareds' in job else [])
+        return ldret
+
+    return ParseCDList(CDList), ParseLDList(LDList)
 
 
 def main(args):
     opts = ParseArguments(args)
-    CompilationDatabase = CatchCompilationDatabase(opts) if opts.build \
-            else LoadCompilationDatabase(opts)
-    PreprocessProject(opts, CompilationDatabase)
+    cj, lj = None, None
+    if opts.build:
+        cj, lj = CatchCompilationDatabase(opts)
+    else:
+        try:
+            cj = json.load(open(opts.compiling, 'r'))
+            # workaround for linking database unsupported projects
+            if os.path.isfile(opts.linking):
+                lj = json.load(open(opts.linking, 'r'))
+            else:
+                print("Warning: Processing compilation database without linking information.",
+                        file=sys.stderr)
+        except OSError as err:
+            print("Error while openning file: open: {}".format(err), file=sys.stderr)
+            exit(err.errno)
+    cd, ld = ParseCompilationCommands(cj, lj)
+    print(json.dumps(cd, indent=4))
+    print(json.dumps(ld, indent=4))
+    # FIXME: PreprocessProject is broken in this commit.
+    #PreprocessProject(opts, CompilationDatabase)
 
 
 if '__main__' == __name__:
