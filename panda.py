@@ -502,12 +502,15 @@ class Filter:
             ret.append(next(i))
         return ret
 
-    def MatchExec(self, exe):
+    def MatchExecFilterIndex(self, exe):
         exe = os.path.basename(exe)
-        for ef in self.filters.execfilter:
-            if ef.fullmatch(exe):
-                return exe
+        for efi in range(len(self.filters.execfilter)):
+            if self.filters.execfilter[efi].fullmatch(exe):
+                return efi
         return None
+
+    def MatchExec(self, exe):
+        return exe if self.MatchExecFilterIndex(exe) is not None else None
 
     def MatchAbort(self, arg):
         return arg in self.filters.abort
@@ -528,12 +531,12 @@ class Filter:
         match = self.filters.source.match(os.path.basename(arg))
         return arg if match and (os.path.exists(arg) or arg.startswith('/tmp/')) else None
 
-    def ParseExecutionCommands(self, exe):
-        args = iter(exe.arguments)
-        if not self.MatchExec(next(args)):
+    def ParseExecutionCommands(self, arguments, pwd):
+        args = iter(arguments)
+        self.exe = self.MatchExec(next(args))
+        if not self.exe:
             return None
-        self.exe = exe.arguments[0]
-        self.pwd = exe.pwd
+        self.pwd = pwd
         self.files = list()
         self.arguments = list()
         self.output = None
@@ -544,13 +547,13 @@ class Filter:
                 if self.filters.output:
                     target = self.MatchOutput(arg, args)
                     if target:
-                        self.output = os.path.join(exe.pwd, target[-1])
+                        self.output = os.path.join(pwd, target[-1])
                         if 1 != len(target):
                             self.arguments += target[:-1]
                         self.arguments.append(self.output)
                         continue
                 if self.filters.source:
-                    src = self.MatchSource(arg, exe.pwd)
+                    src = self.MatchSource(arg, pwd)
                     if src:
                         self.files.append(src)
                         self.arguments.append(src)
@@ -576,9 +579,9 @@ class CC1Filter(Filter):
             source=CC1Filter.cc1source))
 
     @staticmethod
-    def MatchArguments(exe):
+    def MatchArguments(arguments, pwd):
         Self = CC1Filter()
-        result = Self.ParseExecutionCommands(exe)
+        result = Self.ParseExecutionCommands(arguments, pwd)
         return CompilingCommands(compiler=result[0], directory=result[1],
                 files=result[2], arguments=result[3], output=result[4],
                 oindex=result[5], compilation='-c' in result[3]) if result else None
@@ -598,9 +601,9 @@ class ARFilter(Filter):
         return [arg] if self.filters.output.match(arg) else None
 
     @staticmethod
-    def MatchArguments(exe):
+    def MatchArguments(arguments, pwd):
         Self = ARFilter()
-        result = Self.ParseExecutionCommands(exe)
+        result = Self.ParseExecutionCommands(arguments, pwd)
         return LinkingCommands(linker=result[0], directory=result[1],
                 files=result[2], arguments=result[3], output=result[4],
                 oindex=result[5], archive=True) if result else None
@@ -618,9 +621,9 @@ class LDFilter(Filter):
             output=LDFilter.ldoutput, source=LDFilter.ldsource))
 
     @staticmethod
-    def MatchArguments(exe):
+    def MatchArguments(arguments, pwd):
         Self = LDFilter()
-        result = Self.ParseExecutionCommands(exe)
+        result = Self.ParseExecutionCommands(arguments, pwd)
         return LinkingCommands(linker=result[0], directory=result[1],
                 files=result[2], arguments=result[3], output=result[4],
                 oindex=result[5], archive=False) if result else None
@@ -635,9 +638,9 @@ class AliasFilter:
             Default.asmfilter, re.compile("^-o"))
 
     @staticmethod
-    def MatchArguments(exe):
+    def MatchArguments(arguments, pwd):
         argfilter, ifile, ofile = None, None, None
-        args = iter(exe.arguments)
+        args = iter(arguments)
         exename = os.path.basename(next(args))
         if AliasFilter.clangfilter.exe.match(exename) and '-cc1' == next(args):
             argfilter = AliasFilter.clangfilter
@@ -653,7 +656,7 @@ class AliasFilter:
                 ifile = next(args) if '-' == imatch.group(0)[0] else imatch.group(0)
             elif omatch:
                 ofile = next(args) if '-' == omatch.group(0)[0] else omatch.group(0)
-        return {os.path.join(exe.pwd, ifile): [os.path.join(exe.pwd, ofile)]} \
+        return {os.path.join(pwd, ifile): [os.path.join(pwd, ofile)]} \
                 if ifile and ofile else None
 
 
@@ -757,21 +760,21 @@ def CatchCompilationDatabase(opts):
         AliasDatabase = dict()
         for i in TraverseCommands(outputdir):
             exe = ExecCommands(**i)
-            cd = CC1Filter.MatchArguments(exe)
+            cd = CC1Filter.MatchArguments(exe.arguments, exe.pwd)
             if cd and cd.files:
                 CompilationDatabase.append(cd)
                 continue
-            ar = ARFilter.MatchArguments(exe)
+            ar = ARFilter.MatchArguments(exe.arguments, exe.pwd)
             if ar and ar.files:
                 LinkingDatabase.append(ar)
                 AliasDatabase[ar.output] = ar.files
                 continue
-            ld = LDFilter.MatchArguments(exe)
+            ld = LDFilter.MatchArguments(exe.arguments, exe.pwd)
             if ld and ld.files:
                 LinkingDatabase.append(ld)
                 AliasDatabase[ld.output] = ld.files
                 continue
-            al = AliasFilter.MatchArguments(exe)
+            al = AliasFilter.MatchArguments(exe.arguments, exe.pwd)
             if al:
                 for k in al:
                     if k in AliasDatabase:
