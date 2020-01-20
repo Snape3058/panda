@@ -177,6 +177,8 @@ def ParseArguments(args):  # {{{
     if opts.build and not opts.commands:
         # -b, --build is provided without any arguments
         opts.commands = ['make']
+    opts.compiling = os.path.join(Default.execdir, opts.compiling)
+    opts.linking = os.path.join(Default.execdir, opts.linking)
 
     opts.output = os.path.abspath(opts.output)
     if not os.path.exists(opts.output) and (opts.build or opts.ast or opts.i or
