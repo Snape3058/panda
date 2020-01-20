@@ -51,7 +51,7 @@ class Default:  # {{{
     cxx = 'clang++'
     cfm = 'clang-extdef-mapping'
     fmname = 'externalFnMap.txt'
-    sourcefilter = re.compile('^[^-].*\.(c|C|cc|CC|cxx|cpp|c\+\+|i|ii|ixx|ipp|i\+\+)')
+    sourcefilter = re.compile('^[^-].*\.(c|C|cc|CC|cxx|cpp|c\+\+|i|ii|ixx|ipp|i\+\+)$')
     asmfilter = re.compile("^[^-].*\.(s|S|sx|asm)$")
     objectfilter = re.compile('^[^-].*\.(o|obj)$')
     sharedfilter = re.compile('^[^-].*\.(so([\d.]+)?|dll)$')
@@ -568,7 +568,9 @@ class CC1Filter(Filter):
     cc1filter = [re.compile('^([\w-]*g?cc|[\w-]*[gc]\+\+|clang(\+\+)?)(-[\d.]+)?$')]
     cc1abort = ['-E', '-cc1', '-cc1as', '-M', '-MM', '-###', '-fsyntax-only']
     cc1remove = [Filter.ParameterType(re.compile('^-[lL]'), 1),
-            Filter.ParameterType(re.compile('^-(Wl,|Werror|Wall|M.?|shared|static)'), 0)]
+            Filter.ParameterType(re.compile('^-(Wl,|shared|static)'), 0),
+            Filter.ParameterType(re.compile(
+                '^-(v|Werror(=.+)?|Wall|Wextra|M[DFGMPQT]*|)$'), 0)]
     cc1output = Filter.ParameterType(re.compile('^-o'), 1)
     cc1source = Default.sourcefilter
 
