@@ -195,6 +195,7 @@ def ParseArguments(args):  # {{{
         opts.cc = os.path.abspath(os.path.join(opts.clang, opts.cc))
         opts.cxx = os.path.abspath(os.path.join(opts.clang, opts.cxx))
         opts.cfm = os.path.abspath(os.path.join(opts.clang, opts.cfm))
+    CC1JsonFilter.setCompilers(opts.cc, opts.cxx)
 
     # check whether the command executable exists and is executable
     def checkCommandExecutable(cmd, opt):
@@ -594,6 +595,10 @@ class CC1Filter(Filter):
                 oindex=result[5], compilation='-c' in result[3]) if result else None
 
     @staticmethod
+    def getTargetID(name):
+        return ''.join([os.path.dirname(name)[-1], '.', os.path.basename(name)])
+
+    @staticmethod
     def reformatInputFile(ifile, arguments, files, compilation):
         for rm in files:
             if rm == ifile:
@@ -804,6 +809,50 @@ def CatchCompilationDatabase(opts):
     # CatchCompilationDatabase:
     CD, LD, AD, CJ, LJ = HandleCompileCommands(BuildProject(opts))
     return CJ
+
+
+class CC1JsonFilter(Filter):
+    cc1filter = [re.compile('^([\w-]*g?cc|clang)(-[\d.]+)?$'),
+            re.compile('^([\w-]*[gc]\+\+|clang\+\+)(-[\d.]+)?$')]
+    cc1compiler = [Default.cc, Default.cxx]
+
+    cc1remove = CC1Filter.cc1remove + [
+            Filter.ParameterType(re.compile('^-(w|g|O([0123sg]|fast)?)$'), 0)]
+
+    cc1append = ['-w', '-g', '-O0']
+
+    @staticmethod
+    def setCompilers(cc, cxx):
+        CC1JsonFilter.cc1compiler = [cc, cxx]
+
+    def __init__(self):
+        super().__init__(Filter.FilterType(
+            execfilter=CC1JsonFilter.cc1filter, abort=CC1Filter.cc1abort,
+            remove=CC1JsonFilter.cc1remove, output=CC1Filter.cc1output,
+            source=CC1Filter.cc1source))
+
+    def MatchExec(self, exe):
+        index = self.MatchExecFilterIndex(exe)
+        return None if index is None else CC1JsonFilter.cc1compiler[index]
+
+    @staticmethod
+    def MatchArguments(job):
+        Self = CC1JsonFilter()
+        result = Self.ParseExecutionCommands(job['arguments'], job['directory'])
+        output = result[4]
+        if not Default.objectfilter.match(output):
+            target = CC1Filter.getTargetID(output)
+            output = ''.join([job['file'], '.', target, '.o'])
+            result[3][result[5]] = output
+        return CompilingCommands(compiler=result[0], directory=result[1],
+                files=result[2], arguments=result[3] + CC1JsonFilter.cc1append,
+                output=output, oindex=result[5], compilation='-c' in result[3]) \
+                        if result else None
+
+    @staticmethod
+    def getCompilerType(name):
+        Self = CC1Filter()
+        return Self.MatchExec(name)
 
 
 # LoadCompilationDatabase: load CompilationDatabase from input file
