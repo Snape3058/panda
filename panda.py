@@ -588,6 +588,15 @@ class CC1Filter(Filter):
                 files=result[2], arguments=result[3], output=result[4],
                 oindex=result[5], compilation='-c' in result[3]) if result else None
 
+    @staticmethod
+    def reformatInputFile(ifile, arguments, files, compilation):
+        for rm in files:
+            if rm == ifile:
+                if not compilation:
+                    arguments.insert(arguments.index(ifile), '-c')
+            else:
+                arguments.remove(rm)
+
 
 class ARFilter(Filter):
     arfilter = [re.compile('^[\w-]*ar(-[\d.]+)?$')]
@@ -706,12 +715,8 @@ def CatchCompilationDatabase(opts):
                             output = AD[out]
                             break
                 arguments[cmd.oindex + 1] = output
-                for rfile in cmd.files:
-                    if rfile == ifile:
-                        if not cmd.compilation:
-                            arguments.insert(arguments.index(rfile), '-c')
-                    else:
-                        arguments.remove(rfile)
+                CC1Filter.reformatInputFile(ifile, arguments, cmd.files,
+                        cmd.compilation)
                 ret.append({'output': output, 'directory': cmd.directory,
                     'file': ifile, 'arguments': arguments})
         with open(os.path.join(opts.output, 'compile_commands.json'), 'w') as f:
