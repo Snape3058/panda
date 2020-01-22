@@ -846,7 +846,10 @@ class CC1JsonFilter(Filter):
             result[3][result[5]] = output
         return CompilingCommands(compiler=result[0], directory=result[1],
                 files=result[2], arguments=result[3] + CC1JsonFilter.cc1append,
-                output=output, oindex=result[5], compilation='-c' in result[3]) \
+                output=output, oindex=result[5],
+                # Different with CC1Filter, CC1JsonFilter will fill compilation
+                # field with the original CompilingCommands.
+                compilation=job) \
                         if result else None
 
     @staticmethod
@@ -870,7 +873,7 @@ def ParseCompilationCommands(CDList, LDList):
             job['file'] = os.path.join(job['directory'], job['file'])
             parsed = CC1JsonFilter.MatchArguments(job)
             CC1Filter.reformatInputFile(job['file'], parsed.arguments, parsed.files,
-                    parsed.compilation)
+                    '-c' in parsed.arguments)
             cdret[parsed.output] = parsed
         return cdret
 
