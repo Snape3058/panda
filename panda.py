@@ -15,14 +15,16 @@ import textwrap
 from multiprocessing import Pool as pool
 
 ExecCommands = namedtuple('ExecCommands',
-        ['method', 'ppid', 'pid', 'pwd', 'arguments'])
+                          ['method', 'ppid', 'pid', 'pwd', 'arguments'])
 CompilingCommands = namedtuple('CompilingCommands',
-        ['compiler', 'directory', 'files', 'arguments', 'output', 'oindex', 'compilation'])
+                               ['compiler', 'directory', 'files', 'arguments',
+                                'output', 'oindex', 'compilation'])
 LinkingCommands = namedtuple('LinkingCommands',
-        ['linker', 'directory', 'files', 'arguments', 'output', 'oindex', 'archive'])
+                             ['linker', 'directory', 'files', 'arguments',
+                              'output', 'oindex', 'archive'])
 LinkingAlias = namedtuple('LinkingAlias', ['output', 'objects', 'libraries'])
 ExecutedCommand = namedtuple('ExecutedCommand',
-        ['output', 'arguments', 'directory'])
+                             ['output', 'arguments', 'directory'])
 
 
 # default configurations and strings
@@ -46,35 +48,37 @@ class Default:  # {{{
     cfm = 'clang-extdef-mapping'
     fmname = 'externalFnMap.txt'
     PathTreeRoot = 'preprocess-root'
-    sourcefilter = re.compile('^[^-].*\.(c|C|cc|CC|cxx|cpp|c\+\+|i|ii|ixx|ipp|i\+\+)$')
-    asmfilter = re.compile("^[^-].*\.(s|S|sx|asm)$")
-    objectfilter = re.compile('^[^-].*\.(o|obj)$')
-    sharedfilter = re.compile('^[^-].*\.(so([\d.]+)?|dll)$')
-    archivefilter = re.compile('^[^-].*\.(a|lib)$')
-    libraryfilter = re.compile('^[^-].*\.(so([\d.]+)?|dll|a|lib)$')
-    linksourcefilter = re.compile('^[^-].*\.(o|obj|so([\d.]+)?|dll|a|lib)$')
+    sourcefilter = re.compile(
+        r'^[^-].*\.(c|C|cc|CC|cxx|cpp|c\+\+|i|ii|ixx|ipp|i\+\+)$')
+    asmfilter = re.compile(r'^[^-].*\.(s|S|sx|asm)$')
+    objectfilter = re.compile(r'^[^-].*\.(o|obj)$')
+    sharedfilter = re.compile(r'^[^-].*\.(so([\d.]+)?|dll)$')
+    archivefilter = re.compile(r'^[^-].*\.(a|lib)$')
+    libraryfilter = re.compile(r'^[^-].*\.(so([\d.]+)?|dll|a|lib)$')
+    linksourcefilter = re.compile(r'^[^-].*\.(o|obj|so([\d.]+)?|dll|a|lib)$')
 
     # program description
     DescriptionMsg = '\n'.join(
-            ['Execute compilation database dependent commands.', ''] +
-            textwrap.wrap(
-'''This program is used for executing commands that need the compilation flags
-parsed from a compilation database. Beside customized commands, it integrates
-the functionalities of generating the following types of files:''',
-                width=80, break_long_words=False, break_on_hyphens=False
-                ) +
-            ['\n'.join(['  - {} ({})' for _ in range(6)]).format(
-                    i_desc, '*.i for C files, and *.ii for C++ files',
-                    ast_desc, '*.ast', ll_desc, '*.ll', bc_desc, '*.bc',
-                    fm_desc, fmname, si_desc, '[source|ast|i|ll|bc]-index.txt'
-                    ), ''] +
-            textwrap.wrap(
-'''Besides, you can also execute other commands on some translation units. For
-detailed usages, please refer to the help information of the commandline
-arguments below.''',
-                width=80, break_long_words=False, break_on_hyphens=False
-                )
-            )
+        ['Execute compilation database dependent commands.', ''] +
+        textwrap.wrap(
+            'This program is used for executing commands that need the '
+            'compilation flags parsed from a compilation database. Beside '
+            'customized commands, it integrates the functionalities of '
+            'generating the following types of files:',
+            width=80, break_long_words=False, break_on_hyphens=False
+        ) +
+        ['\n'.join(['  - {} ({})' for _ in range(6)]).format(
+            i_desc, '*.i for C files, and *.ii for C++ files',
+            ast_desc, '*.ast', ll_desc, '*.ll', bc_desc, '*.bc',
+            fm_desc, fmname, si_desc, '[source|ast|i|ll|bc]-index.txt'
+        ), ''] +
+        textwrap.wrap(
+            'Besides, you can also execute other commands on some translation '
+            'units. For detailed usages, please refer to the help information '
+            'of the commandline arguments below.',
+            width=80, break_long_words=False, break_on_hyphens=False
+        )
+    )
     # program version info
     VersionMsg = ''
 
@@ -84,7 +88,7 @@ arguments below.''',
             return Default.VersionMsg
 
         ret = ['Panda {} (Python 3)'.format(Default.Version),
-                'git checkout: {}'.format(Default.Commit)]
+               'git checkout: {}'.format(Default.Commit)]
         pin, pout = os.pipe()
         if 0 == os.fork():
             os.dup2(pout, 1)
@@ -104,71 +108,91 @@ arguments below.''',
         return Default.VersionMsg
 
     @staticmethod
-    def GetPreprocessOutputName(outputdir, OriginOutput, sufix = ''):
+    def GetPreprocessOutputName(outputdir, OriginOutput, sufix=''):
         return os.path.normpath(os.path.join(outputdir, Default.PathTreeRoot,
-            './' + OriginOutput + sufix))
+                                             './' + OriginOutput + sufix))
 
     # }}}
 
 
 # ParseArguments: parse command line arguments with argparse.
 def ParseArguments(args):  # {{{
-    parser = argparse.ArgumentParser(description=Default.DescriptionMsg,
-            formatter_class=argparse.RawTextHelpFormatter)
-    parser.add_argument('-v', '--version', action='version',
-            version=Default.getVersionMsg())
-    parser.add_argument('-V', '--verbose', action='store_true', dest='verbose',
-            help='Verbose output mode.')
-    parser.add_argument('-b', '--build', action='store_true', dest='build',
-            help='Build the project and catch the compilation database.')
-    parser.add_argument('commands', nargs='*',
-            help=' '.join(['Command and arguments to be executed.',
-                'Add "--" before the beginning of the command.',
-                '(required when -b is enabled)']))
-    parser.add_argument('-A', '--generate-ast', action='store_true', dest='ast',
-            help='Generate ' + Default.ast_desc)
-    parser.add_argument('-E', '--generate-i', action='store_true', dest='i',
-            help='Generate ' + Default.i_desc)
-    parser.add_argument('-S', '--generate-ll', action='store_true', dest='ll',
-            help='Generate ' + Default.ll_desc)
-    parser.add_argument('-B', '--generate-bc', action='store_true', dest='bc',
-            help='Generate ' + Default.bc_desc)
-    parser.add_argument('-M', '--generate-fm', action='store_true', dest='fm',
-            help='Generate ' + Default.fm_desc)
-    parser.add_argument('-L', '--list-files', action='store_true', dest='ls',
-            help='List source code files and generated files to different index files.')
-    parser.add_argument('-P', '--copy-file', action='store_true', dest='cp',
-            help='Copy source code file to output directory.')
-    parser.add_argument('-T', '--target-related', action='store_true', dest='target',
-            help='Generate target related compile_commands.json and file lists.')
-    parser.add_argument('-o', '--output',
-            type=str, dest='output', default=os.path.abspath('./'),
-            help='Customize the output directory. (default is "./")')
-    parser.add_argument('--compiling', metavar='<compile_commands.json>',
-            type=str, dest='compiling', default=os.path.abspath('./compile_commands.json'),
-            help='Customize the compiling database file.')
-    parser.add_argument('--linking', metavar='<link_commands.json>',
-            type=str, dest='linking', default=os.path.abspath('./link_commands.json'),
-            help='Customize the linking database file.')
-    parser.add_argument('--cc',
-            type=str, dest='cc', default=Default.cc,
-            help='Customize the C compiler. (default is clang)')
-    parser.add_argument('--cxx',
-            type=str, dest='cxx', default=Default.cxx,
-            help='Customize the C++ compiler. (default is clang++)')
-    parser.add_argument('--cfm', metavar='<clang-func-mapping>',
-            type=str, dest='cfm', default=Default.cfm,
-            help='Customize the function mapping scanner. (default is clang-func-mapping)')
-    parser.add_argument('--fm-name', metavar='<{}>'.format(Default.fmname),
-            type=str, dest='fmname', default=Default.fmname,
-            help='Customize the output filename of the {}. (default is {})'.format(
-                Default.fm_desc, Default.fmname))
-    parser.add_argument('-p', '--clang-path', metavar='CLANG_PATH', type=str, dest='clang',
-            help='Customize the Clang executable directory for searching compilers.')
-    parser.add_argument('-j', '--jobs', type=int, dest='jobs', default=1,
-            help='Customize the number of jobs allowed in parallel.')
-    parser.add_argument('--ctu', action='store_true', dest='ctu',
-            help='Prepare for cross-TU analysis, (alias to -A and -M)')
+    parser = argparse.ArgumentParser(
+        description=Default.DescriptionMsg,
+        formatter_class=argparse.RawTextHelpFormatter)
+    parser.add_argument(
+        '-v', '--version', action='version', version=Default.getVersionMsg())
+    parser.add_argument(
+        '-V', '--verbose', action='store_true', dest='verbose',
+        help='Verbose output mode.')
+    parser.add_argument(
+        '-b', '--build', action='store_true', dest='build',
+        help='Build the project and catch the compilation database.')
+    parser.add_argument(
+        'commands', nargs='*',
+        help=' '.join(['Command and arguments to be executed.',
+                       'Add "--" before the beginning of the command.',
+                       '(required when -b is enabled)']))
+    parser.add_argument(
+        '-A', '--generate-ast', action='store_true', dest='ast',
+        help='Generate ' + Default.ast_desc)
+    parser.add_argument(
+        '-E', '--generate-i', action='store_true', dest='i',
+        help='Generate ' + Default.i_desc)
+    parser.add_argument(
+        '-S', '--generate-ll', action='store_true', dest='ll',
+        help='Generate ' + Default.ll_desc)
+    parser.add_argument(
+        '-B', '--generate-bc', action='store_true', dest='bc',
+        help='Generate ' + Default.bc_desc)
+    parser.add_argument(
+        '-M', '--generate-fm', action='store_true', dest='fm',
+        help='Generate ' + Default.fm_desc)
+    parser.add_argument(
+        '-L', '--list-files', action='store_true', dest='ls',
+        help='Generate a list for each kind of generated files.')
+    parser.add_argument(
+        '-P', '--copy-file', action='store_true', dest='cp',
+        help='Copy source code file to output directory.')
+    parser.add_argument(
+        '-T', '--target-related', action='store_true', dest='target',
+        help='Generate target related compile_commands.json and file lists.')
+    parser.add_argument(
+        '-o', '--output', type=str, dest='output', default=Default.execdir,
+        help='Customize the output directory. (default is "./")')
+    parser.add_argument(
+        '--compiling', metavar='<compile_commands.json>', type=str,
+        dest='compiling', default=os.path.abspath('./compile_commands.json'),
+        help='Customize the compiling database file.')
+    parser.add_argument(
+        '--linking', metavar='<link_commands.json>', type=str,
+        dest='linking', default=os.path.abspath('./link_commands.json'),
+        help='Customize the linking database file.')
+    parser.add_argument(
+        '--cc', type=str, dest='cc', default=Default.cc,
+        help='Customize the C compiler. (default is clang)')
+    parser.add_argument(
+        '--cxx', type=str, dest='cxx', default=Default.cxx,
+        help='Customize the C++ compiler. (default is clang++)')
+    parser.add_argument(
+        '--cfm', metavar='<clang-func-mapping>', type=str,
+        dest='cfm', default=Default.cfm,
+        help='Customize the function mapping scanner. (default is '
+        'clang-func-mapping)')
+    parser.add_argument(
+        '--fm-name', metavar='<{}>'.format(Default.fmname), type=str,
+        dest='fmname', default=Default.fmname,
+        help='Customize the output filename of the {}. (default is {})'.format(
+            Default.fm_desc, Default.fmname))
+    parser.add_argument(
+        '-p', '--clang-path', metavar='CLANG_PATH', type=str, dest='clang',
+        help='Customize the compiler executable directory for searching.')
+    parser.add_argument(
+        '-j', '--jobs', type=int, dest='jobs', default=1,
+        help='Customize the number of jobs allowed in parallel.')
+    parser.add_argument(
+        '--ctu', action='store_true', dest='ctu',
+        help='Prepare for cross-TU analysis, (alias to -A and -M)')
     opts = parser.parse_args(args[1:])
 
     # set alias for --ctu
@@ -183,11 +207,10 @@ def ParseArguments(args):  # {{{
     opts.linking = os.path.join(Default.execdir, opts.linking)
 
     opts.output = os.path.abspath(opts.output)
-    if not os.path.exists(opts.output) and (opts.build or opts.ast or opts.i or
-            opts.ll or opts.bc or opts.fm or opts.ls or opts.cp):
+    has_output = [opts.build, opts.ast, opts.i, opts.ll, opts.bc, opts.fm,
+                  opts.ls, opts.cp]
+    if not os.path.exists(opts.output) and any(has_output):
         os.makedirs(opts.output)
-
-    return opts
 
     # reset executable path for --clang-path
     if opts.clang:
@@ -204,9 +227,11 @@ def ParseArguments(args):  # {{{
         try:
             popen([cmd, '--version'], stdout=pipe, stderr=pipe).wait()
         except OSError as err:
-            print('\n'.join(['Error:\tRequired tool "{}" not available.',
-                '\tPlease check your settings of "{}" or "--clang-path".',
-                'popen: {}']).format(
+            print(
+                '\n'.join([
+                    'Error:\tRequired tool "{}" not available.',
+                    '\tPlease check your settings of "{}" or "--clang-path".',
+                    'popen: {}']).format(
                     os.path.basename(cmd), opt, err),
                 file=sys.stderr)
             exit(err.errno)
@@ -216,6 +241,8 @@ def ParseArguments(args):  # {{{
     if opts.ast or opts.i or opts.ll or opts.bc:
         checkCommandExecutable(opts.cc, '--cc')
         checkCommandExecutable(opts.cxx, '--cxx')
+
+    return opts
 
     # }}}
 
@@ -251,17 +278,19 @@ def RunCommand(command, verbose):
 #   target: the filename of the link target
 #   dependencies: the files that the target depends on
 #   - keep target=None and dependencies=[] if the job is for target `all'
-def TargetJob(opts, cdb, target = None, dependencies = []):
+def TargetJob(opts, cdb, target=None, dependencies=[]):
     outputDB = None
     outputdir = opts.output
     if target:
-        print('Generating "compile_commands.json" for target "{}".'.format(target))
+        print('Generating "compile_commands.json" for target "{}".'
+              .format(target))
         outputdir = Default.GetPreprocessOutputName(outputdir, target)
         if not os.path.exists(outputdir):
             os.makedirs(outputdir)
         output = os.path.join(outputdir, 'compile_commands.json')
         outputDB = [cdb[i] for i in dependencies]
-        json.dump([i.compilation for i in outputDB], open(output, 'w'), indent=4)
+        json.dump([i.compilation for i in outputDB],
+                  open(output, 'w'), indent=4)
     else:
         outputDB = [cdb[i] for i in cdb]
     srclist = {src for t in outputDB for src in t.files}
@@ -277,27 +306,37 @@ def TargetJob(opts, cdb, target = None, dependencies = []):
                 func = func.split()
                 if func:
                     print(func[0], Default.GetPreprocessOutputName(
-                        opts.output, func[1], '.ast'), file = ffm)
+                        opts.output, func[1], '.ast'), file=ffm)
     if opts.ls:
         print('Generating file lists for {}.'.format(
             'target "{}"'.format(target) if target else 'the project'))
         with open(os.path.join(outputdir, 'source-index.txt'), 'w') as fsrc:
             for i in srclist:
-                print(i, file = fsrc)
-        fast = open(os.path.join(outputdir, 'ast-index.txt') \
-                if opts.ast else os.devnull, 'w')
-        fi = open(os.path.join(outputdir, 'i-index.txt') \
-                if opts.i else os.devnull, 'w')
-        fll = open(os.path.join(outputdir, 'll-index.txt') \
-                if opts.ll else os.devnull, 'w')
-        fbc = open(os.path.join(outputdir, 'bc-index.txt') \
-                if opts.bc else os.devnull, 'w')
+                print(i, file=fsrc)
+        fast = open(os.path.join(outputdir, 'ast-index.txt')
+                    if opts.ast else os.devnull, 'w')
+        fi = open(os.path.join(outputdir, 'i-index.txt')
+                  if opts.i else os.devnull, 'w')
+        fll = open(os.path.join(outputdir, 'll-index.txt')
+                   if opts.ll else os.devnull, 'w')
+        fbc = open(os.path.join(outputdir, 'bc-index.txt')
+                   if opts.bc else os.devnull, 'w')
         for t in outputDB:
-            print(Default.GetPreprocessOutputName(opts.output, t.output, '.ast'), file = fast)
-            print(Default.GetPreprocessOutputName(opts.output, t.output,
-                    '.i' if t.compiler == opts.cc else '.ii'), file = fi)
-            print(Default.GetPreprocessOutputName(opts.output, t.output, '.ll'), file = fll)
-            print(Default.GetPreprocessOutputName(opts.output, t.output, '.bc'), file = fbc)
+            print(
+                Default.GetPreprocessOutputName(opts.output, t.output, '.ast'),
+                file=fast)
+            print(
+                Default.GetPreprocessOutputName(
+                    opts.output,
+                    t.output,
+                    '.i' if t.compiler == opts.cc else '.ii'),
+                file=fi)
+            print(
+                Default.GetPreprocessOutputName(opts.output, t.output, '.ll'),
+                file=fll)
+            print(
+                Default.GetPreprocessOutputName(opts.output, t.output, '.bc'),
+                file=fbc)
         for f in (fast, fi, fll, fbc):
             f.close()
 
@@ -328,7 +367,8 @@ def PreprocessProject(opts, cdb, ldb):
 
             # make command for ast/i/ll/bc job
             def MakeExecutedCommand(ext, appendargs):
-                out = Default.GetPreprocessOutputName(opts.output, job.output, ext)
+                out = Default.GetPreprocessOutputName(
+                    opts.output, job.output, ext)
                 args = arguments + appendargs
                 args[job.oindex + 1] = out
                 jobList.append((RunCommand, ExecutedCommand(
@@ -338,15 +378,18 @@ def PreprocessProject(opts, cdb, ldb):
                 MakeExecutedCommand('.ast', ['-emit-ast'])
             if opts.i:
                 MakeExecutedCommand('.i' if job.compiler == opts.cc else '.ii',
-                        ['-E'])
+                                    ['-E'])
             if opts.ll:
-                MakeExecutedCommand('.ll',
-                        ['-emit-llvm', '-S', '-Xclang', '-disable-O0-optnone'])
+                MakeExecutedCommand(
+                    '.ll', [
+                        '-emit-llvm', '-S', '-Xclang', '-disable-O0-optnone'])
             if opts.bc:
-                MakeExecutedCommand('.bc',
-                        ['-emit-llvm', '-Xclang', '-disable-O0-optnone'])
+                MakeExecutedCommand(
+                    '.bc', [
+                        '-emit-llvm', '-Xclang', '-disable-O0-optnone'])
 
-            # only collect depended files of current TU, job are generated below
+            # only collect depended files of current TU, job are generated
+            # below
             if opts.cp:
                 args = [job.compiler] + job.arguments
                 # replace -o (rather than output) with -MT, and -c with -MM
@@ -364,8 +407,13 @@ def PreprocessProject(opts, cdb, ldb):
             MakeExecutedCommandForOneJob(job)
         for i in projectfiles:
             oi = Default.GetPreprocessOutputName(opts.output, i)
-            jobList.append((RunCommand, ExecutedCommand(output=i,
-                arguments=['cp', i, oi], directory=Default.execdir), opts.verbose))
+            jobList.append(
+                (RunCommand,
+                 ExecutedCommand(
+                     output=i,
+                     arguments=['cp', i, oi],
+                     directory=Default.execdir),
+                    opts.verbose))
 
     # Generate pre-process file list
     MakePreprocessJob()
@@ -377,6 +425,7 @@ def PreprocessProject(opts, cdb, ldb):
     def DeductTargets():
         if not ldb:
             return
+
         def DeductOneTarget(target):
             if target.output not in dependency:
                 dependency[target.output] = target.objects.copy()
@@ -405,8 +454,9 @@ def PreprocessProject(opts, cdb, ldb):
 
 
 class Filter:
-    FilterType = namedtuple('FilterType',
-            ['execfilter', 'abort', 'remove', 'output', 'source'])
+    FilterType = namedtuple(
+        'FilterType', [
+            'execfilter', 'abort', 'remove', 'output', 'source'])
     ParameterType = namedtuple('ParameterType', ['matcher', 'count'])
 
     def __init__(self, filters):
@@ -451,12 +501,15 @@ class Filter:
 
     def MatchOutput(self, arg, i):
         return Filter.MatchParameter(self.filters.output.matcher,
-                self.filters.output.count, arg, i)
+                                     self.filters.output.count, arg, i)
 
     def MatchSource(self, arg, pwd):
         arg = os.path.join(pwd, arg)
         match = self.filters.source.match(os.path.basename(arg))
-        return arg if match and (os.path.exists(arg) or arg.startswith('/tmp/')) else None
+        if match and (os.path.exists(arg) or arg.startswith('/tmp/')):
+            return arg
+        else:
+            return None
 
     def ParseExecutionCommands(self, arguments, pwd):
         args = iter(arguments)
@@ -492,13 +545,14 @@ class Filter:
 
 
 class CC1Filter(Filter):
-    cc1filter = [re.compile('^([\w-]*g?cc|[\w-]*[gc]\+\+|clang(\+\+)?)(-[\d.]+)?$')]
+    cc1filter = [
+        re.compile(r'^([\w-]*g?cc|[\w-]*[gc]\+\+|clang(\+\+)?)(-[\d.]+)?$')]
     cc1abort = ['-E', '-cc1', '-cc1as', '-M', '-MM', '-###', '-fsyntax-only']
-    cc1remove = [Filter.ParameterType(re.compile('^-[lL]'), 1),
-            Filter.ParameterType(re.compile('^-(Wl,|shared|static)'), 0),
-            Filter.ParameterType(re.compile(
-                '^-(v|Werror(=.+)?|Wall|Wextra|M[DFGMPQT]*|)$'), 0)]
-    cc1output = Filter.ParameterType(re.compile('^-o'), 1)
+    cc1remove = [Filter.ParameterType(re.compile(r'^-[lL]'), 1),
+                 Filter.ParameterType(re.compile(r'^-(Wl,|shared|static)'), 0),
+                 Filter.ParameterType(re.compile(
+                     r'^-(v|Werror(=.+)?|Wall|Wextra|M[DFGMPQT]*|)$'), 0)]
+    cc1output = Filter.ParameterType(re.compile(r'^-o'), 1)
     cc1source = Default.sourcefilter
 
     def __init__(self):
@@ -511,13 +565,19 @@ class CC1Filter(Filter):
     def MatchArguments(arguments, pwd):
         Self = CC1Filter()
         result = Self.ParseExecutionCommands(arguments, pwd)
-        return CompilingCommands(compiler=result[0], directory=result[1],
-                files=result[2], arguments=result[3], output=result[4],
-                oindex=result[5], compilation='-c' in result[3]) if result else None
+        return CompilingCommands(
+            compiler=result[0],
+            directory=result[1],
+            files=result[2],
+            arguments=result[3],
+            output=result[4],
+            oindex=result[5],
+            compilation='-c' in result[3]) if result else None
 
     @staticmethod
     def getTargetID(name):
-        return ''.join([os.path.dirname(name)[-1], '.', os.path.basename(name)])
+        return ''.join([os.path.dirname(name)[-1],
+                        '.', os.path.basename(name)])
 
     @staticmethod
     def reformatInputFile(ifile, arguments, files, compilation):
@@ -530,7 +590,7 @@ class CC1Filter(Filter):
 
 
 class ARFilter(Filter):
-    arfilter = [re.compile('^[\w-]*ar(-[\d.]+)?$')]
+    arfilter = [re.compile(r'^[\w-]*ar(-[\d.]+)?$')]
     aroutput = Default.archivefilter
     arsource = Default.objectfilter
 
@@ -546,15 +606,19 @@ class ARFilter(Filter):
     def MatchArguments(arguments, pwd):
         Self = ARFilter()
         result = Self.ParseExecutionCommands(arguments, pwd)
-        return LinkingCommands(linker=result[0], directory=result[1],
-                files=result[2], arguments=result[3], output=result[4],
-                oindex=result[5], archive=True) if result else None
-
+        return LinkingCommands(
+            linker=result[0],
+            directory=result[1],
+            files=result[2],
+            arguments=result[3],
+            output=result[4],
+            oindex=result[5],
+            archive=True) if result else None
 
 
 class LDFilter(Filter):
-    ldfilter = [re.compile('^[\w-]*ld(-[\d.]+)?$')]
-    ldoutput = Filter.ParameterType(re.compile('^-o'), 1)
+    ldfilter = [re.compile(r'^[\w-]*ld(-[\d.]+)?$')]
+    ldoutput = Filter.ParameterType(re.compile(r'^-o'), 1)
     ldsource = Default.linksourcefilter
 
     def __init__(self):
@@ -566,18 +630,26 @@ class LDFilter(Filter):
     def MatchArguments(arguments, pwd):
         Self = LDFilter()
         result = Self.ParseExecutionCommands(arguments, pwd)
-        return LinkingCommands(linker=result[0], directory=result[1],
-                files=result[2], arguments=result[3], output=result[4],
-                oindex=result[5], archive=False) if result else None
+        return LinkingCommands(
+            linker=result[0],
+            directory=result[1],
+            files=result[2],
+            arguments=result[3],
+            output=result[4],
+            oindex=result[5],
+            archive=False) if result else None
+
 
 class AliasFilter:
     AliasFilterType = namedtuple('AliasFilterType', ['exe', 'input', 'output'])
-    clangfilter = AliasFilterType(re.compile("^clang(-[\d.]+)?$"),
-            re.compile("^-main-file-name$"), re.compile("^-o"))
-    cc1filter = AliasFilterType(re.compile("^[\w-]*cc1(plus)?(-[\d.]+)?$"),
-            re.compile("^-dumpbase$"), re.compile("^-o"))
-    asfilter = AliasFilterType(re.compile("^[\w-]*as(-[\d.]+)?$"),
-            Default.asmfilter, re.compile("^-o"))
+    clangfilter = AliasFilterType(
+        re.compile(r'^clang(-[\d.]+)?$'),
+        re.compile(r'^-main-file-name$'),
+        re.compile(r'^-o'))
+    cc1filter = AliasFilterType(re.compile(r'^[\w-]*cc1(plus)?(-[\d.]+)?$'),
+                                re.compile(r'^-dumpbase$'), re.compile(r'^-o'))
+    asfilter = AliasFilterType(re.compile(r'^[\w-]*as(-[\d.]+)?$'),
+                               Default.asmfilter, re.compile(r'^-o'))
 
     @staticmethod
     def MatchArguments(arguments, pwd):
@@ -593,20 +665,27 @@ class AliasFilter:
         if not argfilter:
             return None
         for i in args:
-            imatch, omatch = argfilter.input.match(i), argfilter.output.match(i)
+            imatch = argfilter.input.match(i)
+            omatch = argfilter.output.match(i)
             if imatch:
-                ifile = next(args) if '-' == imatch.group(0)[0] else imatch.group(0)
+                ifile = next(args) if '-' == imatch.group(0)[0] \
+                    else imatch.group(0)
             elif omatch:
-                ofile = next(args) if '-' == omatch.group(0)[0] else omatch.group(0)
+                ofile = next(args) if '-' == omatch.group(0)[0] \
+                    else omatch.group(0)
         return {os.path.join(pwd, ifile): [os.path.join(pwd, ofile)]} \
-                if ifile and ofile else None
+            if ifile and ofile else None
 
 
 def CatchCompilationDatabase(opts):
     def BuildProject(opts):
         print('Compiling the project: ' + ' '.join(opts.commands))
-        outputdir = os.path.abspath(os.path.join(opts.output,
-                time.strftime("%Y%m%d_%H%M%S.build", time.localtime())))
+        outputdir = os.path.abspath(
+            os.path.join(
+                opts.output,
+                time.strftime(
+                    '%Y%m%d_%H%M%S.build',
+                    time.localtime())))
         os.makedirs(outputdir)
 
         environ = os.environ.copy()
@@ -647,10 +726,11 @@ def CatchCompilationDatabase(opts):
                             break
                 arguments[cmd.oindex + 1] = output
                 CC1Filter.reformatInputFile(ifile, arguments, cmd.files,
-                        cmd.compilation)
+                                            cmd.compilation)
                 ret.append({'output': output, 'directory': cmd.directory,
-                    'file': ifile, 'arguments': arguments})
-        with open(os.path.join(opts.output, 'compile_commands.json'), 'w') as f:
+                            'file': ifile, 'arguments': arguments})
+        with open(os.path.join(opts.output, 'compile_commands.json'), 'w') \
+                as f:
             json.dump(ret, f, indent=4)
         return ret
 
@@ -673,7 +753,7 @@ def CatchCompilationDatabase(opts):
             if not objs and not archs and not sobjs:
                 continue
             lo = {'output': cmd.output, 'directory': cmd.directory,
-                    'arguments': [cmd.linker] + cmd.arguments}
+                  'arguments': [cmd.linker] + cmd.arguments}
             if objs:
                 lo['objects'] = objs
             if archs:
@@ -687,7 +767,7 @@ def CatchCompilationDatabase(opts):
 
     def HandleCompileCommands(outputdir):
         def TraverseCommands(outputdir):
-            for outputdir, dirs, files in os.walk(outputdir):
+            for outputdir, _, files in os.walk(outputdir):
                 for i in files:
                     i = os.path.join(outputdir, i)
                     yield json.load(open(i, 'r'))
@@ -721,7 +801,8 @@ def CatchCompilationDatabase(opts):
                         AliasDatabase[k] = al[k]
                 continue
         AliasDatabase = SimplifyAlias(AliasDatabase)
-        CDJson = ConstructCompilationDatabase(CompilationDatabase, AliasDatabase)
+        CDJson = ConstructCompilationDatabase(
+            CompilationDatabase, AliasDatabase)
         LDJson = ConstructLinkingDatabase(LinkingDatabase, AliasDatabase)
         with open(os.path.join(outputdir, 'name_mapping.json'), 'w') as f:
             json.dump(AliasDatabase, f, indent=4)
@@ -732,12 +813,12 @@ def CatchCompilationDatabase(opts):
 
 
 class CC1JsonFilter(Filter):
-    cc1filter = [re.compile('^([\w-]*g?cc|clang)(-[\d.]+)?$'),
-            re.compile('^([\w-]*[gc]\+\+|clang\+\+)(-[\d.]+)?$')]
+    cc1filter = [re.compile(r'^([\w-]*g?cc|clang)(-[\d.]+)?$'),
+                 re.compile(r'^([\w-]*[gc]\+\+|clang\+\+)(-[\d.]+)?$')]
     cc1compiler = [Default.cc, Default.cxx]
 
     cc1remove = CC1Filter.cc1remove + [
-            Filter.ParameterType(re.compile('^-(w|g|O([0123sg]|fast)?)$'), 0)]
+        Filter.ParameterType(re.compile(r'^-(w|g|O([0123sg]|fast)?)$'), 0)]
 
     cc1append = ['-w', '-g', '-O0']
 
@@ -758,19 +839,22 @@ class CC1JsonFilter(Filter):
     @staticmethod
     def MatchArguments(job):
         Self = CC1JsonFilter()
-        result = Self.ParseExecutionCommands(job['arguments'], job['directory'])
+        result = Self.ParseExecutionCommands(
+            job['arguments'], job['directory'])
         output = result[4]
         if not Default.objectfilter.match(output):
             target = CC1Filter.getTargetID(output)
             output = ''.join([job['file'], '.', target, '.o'])
             result[3][result[5]] = output
         return CompilingCommands(compiler=result[0], directory=result[1],
-                files=result[2], arguments=result[3] + CC1JsonFilter.cc1append,
-                output=output, oindex=result[5],
-                # Different with CC1Filter, CC1JsonFilter will fill compilation
-                # field with the original CompilingCommands.
-                compilation=job) \
-                        if result else None
+                                 files=result[2], arguments=result[3] +
+                                 CC1JsonFilter.cc1append,
+                                 output=output, oindex=result[5],
+                                 # Different with CC1Filter, CC1JsonFilter
+                                 # will fill compilation field with the
+                                 # original CompilingCommands.
+                                 compilation=job) \
+            if result else None
 
     @staticmethod
     def getCompilerType(name):
@@ -792,8 +876,11 @@ def ParseCompilationCommands(CDList, LDList):
                 job['arguments'] = shlex.split(job.pop('command'))
             job['file'] = os.path.join(job['directory'], job['file'])
             parsed = CC1JsonFilter.MatchArguments(job)
-            CC1Filter.reformatInputFile(job['file'], parsed.arguments, parsed.files,
-                    '-c' in parsed.arguments)
+            CC1Filter.reformatInputFile(
+                job['file'],
+                parsed.arguments,
+                parsed.files,
+                '-c' in parsed.arguments)
             cdret[parsed.output] = parsed
         return cdret
 
@@ -805,17 +892,19 @@ def ParseCompilationCommands(CDList, LDList):
             if 'command' in job:
                 job['arguments'] = shlex.split(job.pop('command'))
             job['output'] = os.path.join(job['directory'], job['output'])
+
             def joinDirectory(job, item):
                 if item in job:
                     for i in range(len(job[item])):
-                        job[item][i] = os.path.join(job['directory'], job[item][i])
+                        job[item][i] = os.path.join(
+                            job['directory'], job[item][i])
             joinDirectory(job, 'objects')
             joinDirectory(job, 'archives')
             joinDirectory(job, 'shareds')
             ldret[job['output']] = LinkingAlias(
-                    output = job['output'], objects = job['objects'],
-                    libraries = job['archives'] if 'archives' in job else [] + \
-                            job['shareds'] if 'shareds' in job else [])
+                output=job['output'], objects=job['objects'],
+                libraries=(job['archives'] if 'archives' in job else [] +
+                           job['shareds'] if 'shareds' in job else []))
         return ldret
 
     return ParseCDList(CDList), ParseLDList(LDList)
@@ -833,10 +922,14 @@ def main(args):
             if os.path.isfile(opts.linking):
                 lj = json.load(open(opts.linking, 'r'))
             else:
-                print("Warning: Processing compilation database without linking information.",
-                        file=sys.stderr)
+                print(
+                    'Warning: Processing compilation database without linking '
+                    'information for linking database.',
+                    file=sys.stderr)
         except OSError as err:
-            print("Error while openning file: open: {}".format(err), file=sys.stderr)
+            print(
+                'Error while openning file: open: {}'.format(err),
+                file=sys.stderr)
             exit(err.errno)
     cd, ld = ParseCompilationCommands(cj, lj)
     PreprocessProject(opts, cd, ld)
