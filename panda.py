@@ -234,7 +234,7 @@ def RunCommand(command, verbose):
         print(arguments)
 
     # create directory for output file
-    if not os.path.exists(outputDir):
+    while not os.path.exists(outputDir):
         try:
             os.makedirs(outputDir)
         except FileExistsError:  # may happen when multi-thread
