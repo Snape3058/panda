@@ -12,6 +12,7 @@ from ctypes import CDLL as openso
 import time
 from collections import namedtuple
 import textwrap
+from multiprocessing import Pool as pool
 
 ExecCommands = namedtuple('ExecCommands',
         ['method', 'ppid', 'pid', 'pwd', 'arguments'])
@@ -44,6 +45,7 @@ class Default:  # {{{
     cxx = 'clang++'
     cfm = 'clang-extdef-mapping'
     fmname = 'externalFnMap.txt'
+    PathTreeRoot = 'preprocess-root'
     sourcefilter = re.compile('^[^-].*\.(c|C|cc|CC|cxx|cpp|c\+\+|i|ii|ixx|ipp|i\+\+)$')
     asmfilter = re.compile("^[^-].*\.(s|S|sx|asm)$")
     objectfilter = re.compile('^[^-].*\.(o|obj)$')
@@ -101,6 +103,11 @@ arguments below.''',
         Default.VersionMsg = '\n'.join(ret)
         return Default.VersionMsg
 
+    @staticmethod
+    def GetPreprocessOutputName(outputdir, OriginOutput, sufix = ''):
+        return os.path.normpath(os.path.join(outputdir, Default.PathTreeRoot,
+            './' + OriginOutput + sufix))
+
     # }}}
 
 
@@ -132,6 +139,8 @@ def ParseArguments(args):  # {{{
             help='List source code files and generated files to different index files.')
     parser.add_argument('-P', '--copy-file', action='store_true', dest='cp',
             help='Copy source code file to output directory.')
+    parser.add_argument('-T', '--target-related', action='store_true', dest='target',
+            help='Generate target related compile_commands.json and file lists.')
     parser.add_argument('-o', '--output',
             type=str, dest='output', default=os.path.abspath('./'),
             help='Customize the output directory. (default is "./")')
@@ -235,21 +244,164 @@ def RunCommand(command, verbose):
     process.wait()
 
 
+# TargetJob: the job of every link target.
+#
+#   opts: opts object (refer to ParseArguments)
+#   cdb: the compilation database struct
+#   target: the filename of the link target
+#   dependencies: the files that the target depends on
+#   - keep target=None and dependencies=[] if the job is for target `all'
+def TargetJob(opts, cdb, target = None, dependencies = []):
+    outputDB = None
+    outputdir = opts.output
+    if target:
+        print('Generating "compile_commands.json" for target "{}".'.format(target))
+        outputdir = Default.GetPreprocessOutputName(outputdir, target)
+        if not os.path.exists(outputdir):
+            os.makedirs(outputdir)
+        output = os.path.join(outputdir, 'compile_commands.json')
+        outputDB = [cdb[i] for i in dependencies]
+        json.dump([i.compilation for i in outputDB], open(output, 'w'), indent=4)
+    else:
+        outputDB = [cdb[i] for i in cdb]
+    srclist = {src for t in outputDB for src in t.files}
+    if opts.fm:
+        print('Generating function mapping list for {}.'.format(
+            'target "{}"'.format(target) if target else 'the project'))
+        arguments = [opts.cfm, '-p', Default.execdir] + srclist
+        process = popen(arguments, cwd=outputdir, stdout=pipe, stderr=pipe)
+        fms = process.stdout.read().decode('utf-8').strip('\n').split('\n')
+        process.wait()
+        with open(os.path.join(outputdir, opts.fmname), 'w') as ffm:
+            for func in fms:
+                func = func.split()
+                if func:
+                    print(func[0], Default.GetPreprocessOutputName(
+                        opts.output, func[1], '.ast'), file = ffm)
+    if opts.ls:
+        print('Generating file lists for {}.'.format(
+            'target "{}"'.format(target) if target else 'the project'))
+        with open(os.path.join(outputdir, 'source-index.txt'), 'w') as fsrc:
+            for i in srclist:
+                print(i, file = fsrc)
+        fast = open(os.path.join(outputdir, 'ast-index.txt') \
+                if opts.ast else os.devnull, 'w')
+        fi = open(os.path.join(outputdir, 'i-index.txt') \
+                if opts.i else os.devnull, 'w')
+        fll = open(os.path.join(outputdir, 'll-index.txt') \
+                if opts.ll else os.devnull, 'w')
+        fbc = open(os.path.join(outputdir, 'bc-index.txt') \
+                if opts.bc else os.devnull, 'w')
+        for t in outputDB:
+            print(Default.GetPreprocessOutputName(opts.output, t.output, '.ast'), file = fast)
+            print(Default.GetPreprocessOutputName(opts.output, t.output,
+                    '.i' if t.compiler == opts.cc else '.ii'), file = fi)
+            print(Default.GetPreprocessOutputName(opts.output, t.output, '.ll'), file = fll)
+            print(Default.GetPreprocessOutputName(opts.output, t.output, '.bc'), file = fbc)
+        for f in (fast, fi, fll, fbc):
+            f.close()
+
+
+# threadjob: Execute func with args and return its return value.
+def threadjob(func, *args):
+    return func(*args)
+
+
 # PreprocessProject: monitor and control the process of preprocess
 #
 #   opts: opts object (refer to ParseArguments)
-#   jobList: compile commands
-def PreprocessProject(opts, jobList):
-    # PreprocessProject:
-    if not jobList:
+#   cdb: compiling commands
+#   ldb: linking commands
+def PreprocessProject(opts, cdb, ldb):
+    if not cdb:
         return
+
+    jobList = list()
+
+    # Traverse compliation database, create job for each TU.
+    def MakePreprocessJob():
+        projectfiles = set()
+
+        def MakeExecutedCommandForOneJob(job):
+            directory = job.directory
+            arguments = [job.compiler] + job.arguments
+
+            # make command for ast/i/ll/bc job
+            def MakeExecutedCommand(ext, appendargs):
+                out = Default.GetPreprocessOutputName(opts.output, job.output, ext)
+                args = arguments + appendargs
+                args[job.oindex + 1] = out
+                jobList.append((RunCommand, ExecutedCommand(
+                    output=out, arguments=args, directory=directory),
+                    opts.verbose))
+            if opts.ast:
+                MakeExecutedCommand('.ast', ['-emit-ast'])
+            if opts.i:
+                MakeExecutedCommand('.i' if job.compiler == opts.cc else '.ii',
+                        ['-E'])
+            if opts.ll:
+                MakeExecutedCommand('.ll',
+                        ['-emit-llvm', '-S', '-Xclang', '-disable-O0-optnone'])
+            if opts.bc:
+                MakeExecutedCommand('.bc',
+                        ['-emit-llvm', '-Xclang', '-disable-O0-optnone'])
+
+            # only collect depended files of current TU, job are generated below
+            if opts.cp:
+                args = [job.compiler] + job.arguments
+                # replace -o (rather than output) with -MT, and -c with -MM
+                args[job.oindex] = '-MT'
+                args[args.index('-c')] = '-MM'
+                p = popen(args, cwd=directory, stdout=pipe, stderr=pipe)
+                for dependency in p.stdout.read().decode('utf-8').split()[1:]:
+                    if dependency != '\\':
+                        projectfiles.add(dependency)
+                p.wait()
+
+        # MakePreprocessJob:
+        for originOutput in cdb:
+            job = cdb[originOutput]
+            MakeExecutedCommandForOneJob(job)
+        for i in projectfiles:
+            oi = Default.GetPreprocessOutputName(opts.output, i)
+            jobList.append((RunCommand, ExecutedCommand(output=i,
+                arguments=['cp', i, oi], directory=Default.execdir), opts.verbose))
+
+    # Generate pre-process file list
+    MakePreprocessJob()
+
+    # Generate target-related compile_commands
+    dependency = dict()
+
+    # Traverse linking database, create job for each link target.
+    def DeductTargets():
+        if not ldb:
+            return
+        def DeductOneTarget(target):
+            if target.output not in dependency:
+                dependency[target.output] = target.objects.copy()
+                if target.libraries:
+                    for lib in target.libraries:
+                        dependency[target.output] += DeductOneTarget(ldb[lib])
+            return dependency[target.output]
+        for tout in ldb:
+            DeductOneTarget(ldb[tout])
+
+    if opts.target:
+        DeductTargets()
+        for t in dependency:
+            jobList.append((TargetJob, opts, cdb, t, dependency[t]))
+
+    # TargetJob for all the source files
+    jobList.append((TargetJob, opts, cdb))
 
     # Do parallel job:
     if 1 == opts.jobs:
         for i in jobList:
-            pass
+            threadjob(*i)
     else:
-        pass
+        with pool(opts.jobs) as p:
+            p.starmap(threadjob, jobList)
 
 
 class Filter:
@@ -687,10 +839,7 @@ def main(args):
             print("Error while openning file: open: {}".format(err), file=sys.stderr)
             exit(err.errno)
     cd, ld = ParseCompilationCommands(cj, lj)
-    print(json.dumps(cd, indent=4))
-    print(json.dumps(ld, indent=4))
-    # FIXME: PreprocessProject is broken in this commit.
-    #PreprocessProject(opts, CompilationDatabase)
+    PreprocessProject(opts, cd, ld)
 
 
 if '__main__' == __name__:
