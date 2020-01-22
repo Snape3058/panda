@@ -3,7 +3,6 @@
 import os
 import sys
 import json
-import threadpool
 import argparse
 from subprocess import Popen as popen
 from subprocess import PIPE as pipe
@@ -39,15 +38,6 @@ class Default:  # {{{
     bc_desc = 'LLVM BitCode file'
     fm_desc = 'Clang External Function Mapping file'
     si_desc = 'source code index file'
-    filterstr = [
-            '-o:',
-            '-O([0123sg]|fast)?',
-            '-Werror(=.+)?',
-            '-W(all|extra)?',
-            '-fsyntax-only',
-            '-g',
-            '.+\\.o(bj)?',
-            ]
     Version = '2.0'
     Commit = '%REPLACE_COMMIT_INFO%'
     cc = 'clang'
@@ -221,93 +211,6 @@ def ParseArguments(args):  # {{{
     # }}}
 
 
-# GetSourceFile: find out source file path through command object
-#
-#   command: a compile command object in database
-def GetSourceFile(command):
-    return os.path.abspath(os.path.join(command['directory'], command['file']))
-
-
-# GetCompilerAndExtension: generate the preprocessor compiler
-#                          and corresponding extension name.
-#
-#   opts: opts object (refer to ParseArguments)
-#   compiler: compiler name
-#   extension: list of extension names for [cc, cxx]
-def GetCompilerAndExtension(opts, compiler, extension):
-    # check suffix only as the compiler argument can be full path
-    if 'cc' == compiler[-2:] or 'clang' == compiler[-5:]:
-        return opts.cc, extension[0]
-    elif '++' == compiler[-2:]:
-        return opts.cxx, extension[1]
-    else:
-        assert False, 'What is this compiler? ' + compiler
-
-
-# GetOutputName: generate the filename of the preprocessed file.
-#
-#   outputDir: output directory
-#   command: a compile command object in database
-#   extension: the extension name of the preprocessed file
-def GetOutputName(outputDir, command, extension):
-    return os.path.abspath(os.path.join(outputDir,
-        GetSourceFile(command)[1:]) + '.' + extension)
-
-
-# MakeCommand: replace the arguments with correct value for preprocess
-#
-#   opts: opts object (refer to ParseArguments)
-#   command: the command object parsed from JSON
-#   extension: the suffix representing its file type
-#   prefix, suffix: the additional arguments to do the corresponding preprocess
-#   argfilter: function to filter arguments
-#
-#   return: command object
-#       the command object is defined as follows:
-#           - arguments: list of arguments to be executed by compiler
-#           - directory: compiler working directory
-#           - output: directory of -o parameter
-def MakeCommand(opts, command, extension, prefix, suffix, argfilter):
-    compiler, extension = GetCompilerAndExtension(
-            opts, command['arguments'][0], extension)
-    arguments = [compiler]
-
-    # append additional arguments for generating targets
-    arguments += prefix
-
-    # generate arguments (including the source file)
-    # FIXME: when generating with both source files and object files,
-    #        if object files are not available, clang will report 404.
-    #        Currently, a filter is added to remove all .o or .obj files.
-    arguments += argfilter(command['arguments'][1:])
-
-    # generate the full path of output file with file type extension
-    output = GetOutputName(opts.output, command, extension)
-    arguments += ['-o', output]
-
-    # append additional arguments for generating targets
-    arguments += suffix
-
-    return {'directory': command['directory'],
-            'arguments': arguments,
-            'output': output}
-
-
-# MakeCopyCommand: make command for copy operation.
-#
-#   opts: opts object (refer to ParseArguments)
-#   command: the command object parsed from JSON
-#
-#   return: command object of cp $file $output/$directory/$file
-def MakeCopyCommand(opts, command):
-    src = GetSourceFile(command)
-    output = os.path.abspath(os.path.join(opts.output, src[1:]))
-
-    return {'directory': command['directory'],
-            'arguments': ['cp', src, output],
-            'output': output}
-
-
 # RunCommand: run the command to do the preprocess
 #
 #   command: the command object to be executed. (in the parsed JSON format)
@@ -332,158 +235,21 @@ def RunCommand(command, verbose):
     process.wait()
 
 
-# GenerateFunctionMappingList: invoke clang-func-mapping to
-#   generate externalFnMap.txt
-#
-#   opts: opts object (refer to ParseArguments)
-#   jobs: the compilation database
-def GenerateFunctionMappingList(opts, jobs):
-    print('Generating function mapping list.')
-
-    src = [GetSourceFile(i) for i in jobs]
-    path = os.path.dirname(opts.compiling)
-    arguments = [opts.cfm, '-p', path] + src
-    outfile = os.path.join(opts.output, opts.fmname)
-
-    process = popen(arguments, stdout=pipe, stderr=pipe)
-    (out, err) = process.communicate()
-    fm = out.decode('utf-8').replace(' /', ' ').replace('\n', '.ast\n')
-
-    with open(outfile, 'w') as fout:
-        fout.write(fm)
-
-    process.wait()
-
-
-# GenerateSourceFileList: dump all TU to an index file.
-#
-#   opts: opts object (refer to ParseArguments)
-#   jobs: the compilation database
-def GenerateSourceFileList(opts, jobs):
-    def WriteListToFile(name, index):
-        name = os.path.abspath(os.path.join(opts.output, name))
-        print('Generating "{}".'.format(name))
-
-        with open(name, 'w') as fout:
-            for i in index:
-                fout.write(i)
-                fout.write('\n')
-
-    WriteListToFile('source-index.txt', [GetSourceFile(i) for i in jobs])
-
-    def WriteGeneratedFileListToFile(name, extension):
-        WriteListToFile(name + '-index.txt',
-                [GetOutputName(opts.output, i,
-                    GetCompilerAndExtension(opts, i['arguments'][0], extension)[1])
-                    for i in jobs])
-    if opts.ast:
-        WriteGeneratedFileListToFile('ast', ['ast', 'ast'])
-    if opts.i:
-        WriteGeneratedFileListToFile('i', ['i', 'ii'])
-    if opts.ll:
-        WriteGeneratedFileListToFile('ll', ['ll', 'll'])
-    if opts.bc:
-        WriteGeneratedFileListToFile('bc', ['bc', 'bc'])
-
-
 # PreprocessProject: monitor and control the process of preprocess
 #
 #   opts: opts object (refer to ParseArguments)
 #   jobList: compile commands
 def PreprocessProject(opts, jobList):
-    def jobRun(opts, job):  # {{{
-        commands = []
-
-        # compile filter regexp and return a filter of it
-        #   filterstr: a list of filter strings
-        def getArgFilter(filterstr):  # {{{
-            # create filter
-            filters = []
-
-            for fs in filterstr:
-                if ':' == fs[-1]:
-                    filters.append((re.compile(fs[:-1]), True))
-                else:
-                    filters.append((re.compile(fs), False))
-
-            def ArgFilter(argv):
-                ret = []
-
-                I = iter(argv)
-                while True:
-                    A = next(I, None)
-                    if A is None:
-                        break
-
-                    for f in filters:
-                        # remove matched
-                        if f[0].fullmatch(A):
-                            if f[1]:
-                                next(I)
-                            A = None
-                            break
-
-                    if A:
-                        ret.append(A)
-
-                return ret
-
-            return ArgFilter
-            # }}}
-
-        # jobRun:
-        if opts.ast:
-            commands.append(MakeCommand(
-                opts, job, ['ast', 'ast'], ['-emit-ast'], ['-w'],
-                getArgFilter(Default.filterstr)))
-
-        if opts.i:
-            commands.append(MakeCommand(
-                opts, job, ['i', 'ii'], ['-E'], ['-w'],
-                getArgFilter(Default.filterstr)))
-
-        if opts.ll:
-            commands.append(MakeCommand(
-                opts, job, ['ll', 'll'], ['-c', '-g', '-emit-llvm', '-S'], ['-w'],
-                getArgFilter(Default.filterstr)))
-
-        if opts.bc:
-            commands.append(MakeCommand(
-                opts, job, ['bc', 'bc'], ['-c', '-g', '-emit-llvm'], ['-w'],
-                getArgFilter(Default.filterstr)))
-
-        if opts.cp:
-            commands.append(MakeCopyCommand(opts, job))
-
-        for cmd in commands:
-            RunCommand(cmd, opts.verbose)
-
-        # }}}
-
     # PreprocessProject:
     if not jobList:
         return
 
-    # Do sequential job:
-    # Generate function mapping list
-    if opts.fm:
-        GenerateFunctionMappingList(opts, jobList)
-
-    # Generate source file list
-    if opts.ls:
-        GenerateSourceFileList(opts, jobList)
-
     # Do parallel job:
     if 1 == opts.jobs:
         for i in jobList:
-            jobRun(opts, i)
+            pass
     else:
-        pool = threadpool.ThreadPool(opts.jobs)
-        reqs = threadpool.makeRequests(
-                jobRun, [([opts, i], None) for i in jobList])
-        for i in reqs:
-            pool.putRequest(i)
-        pool.wait()
+        pass
 
 
 class Filter:
