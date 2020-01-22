@@ -21,6 +21,8 @@ CompilingCommands = namedtuple('CompilingCommands',
 LinkingCommands = namedtuple('LinkingCommands',
         ['linker', 'directory', 'files', 'arguments', 'output', 'oindex', 'archive'])
 LinkingAlias = namedtuple('LinkingAlias', ['output', 'objects', 'libraries'])
+ExecutedCommand = namedtuple('ExecutedCommand',
+        ['output', 'arguments', 'directory'])
 
 
 # default configurations and strings
@@ -311,10 +313,10 @@ def MakeCopyCommand(opts, command):
 #   command: the command object to be executed. (in the parsed JSON format)
 #   verbose: dump the command to be executed.
 def RunCommand(command, verbose):
-    print('Generating "' + command['output'] + '"')
+    print('Generating "' + command.output + '"')
 
-    arguments = command['arguments']
-    outputDir = os.path.dirname(command['output'])
+    arguments = command.arguments
+    outputDir = os.path.dirname(command.output)
 
     if verbose:
         print(arguments)
@@ -326,7 +328,7 @@ def RunCommand(command, verbose):
         except FileExistsError:  # may happen when multi-thread
             pass
 
-    process = popen(arguments, cwd=command['directory'])
+    process = popen(arguments, cwd=command.directory)
     process.wait()
 
 
