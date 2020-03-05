@@ -129,6 +129,9 @@ def ParseArguments(args):  # {{{
         '-b', '--build', action='store_true', dest='build',
         help='Build the project and catch the compilation database.')
     parser.add_argument(
+        '-c', '--capture', type=str, dest='capture', default=None,
+        help='Capture previous build command dump and continue generating.')
+    parser.add_argument(
         'commands', nargs='*',
         help=' '.join(['Command and arguments to be executed.',
                        'Add "--" before the beginning of the command.',
@@ -207,6 +210,12 @@ def ParseArguments(args):  # {{{
             opts.commands += ['-j', str(opts.jobs)]
     opts.compiling = os.path.join(Default.execdir, opts.compiling)
     opts.linking = os.path.join(Default.execdir, opts.linking)
+
+    if opts.capture:
+        if not os.path.isdir(opts.capture):
+            print('Unable to capture: directory "{}" does not exist.'.format(
+                opts.capture), file=sys.stderr)
+            exit(2)
 
     opts.output = os.path.abspath(opts.output)
     has_output = [opts.build, opts.ast, opts.i, opts.ll, opts.bc, opts.fm,
@@ -821,7 +830,8 @@ def CatchCompilationDatabase(opts):
         return (CDJson, LDJson)
 
     # CatchCompilationDatabase:
-    return HandleCompileCommands(BuildProject(opts))
+    dump = BuildProject(opts) if opts.build else opts.capture
+    return HandleCompileCommands(dump)
 
 
 class CC1JsonFilter(Filter):
@@ -925,7 +935,7 @@ def ParseCompilationCommands(CDList, LDList):
 def main(args):
     opts = ParseArguments(args)
     cj, lj = None, None
-    if opts.build:
+    if opts.build or opts.capture:
         cj, lj = CatchCompilationDatabase(opts)
     else:
         try:
