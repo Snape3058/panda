@@ -299,7 +299,9 @@ def TargetJob(opts, cdb, target=None, dependencies=[]):
         if not os.path.exists(outputdir):
             os.makedirs(outputdir)
         output = os.path.join(outputdir, 'compile_commands.json')
-        outputDB = [cdb[i] for i in dependencies]
+        # If the dependency is not in cdb, just ignore it.
+        # FIXME: possible uncaptured command dump
+        outputDB = [cdb[i] for i in dependencies if i in cdb]
         json.dump([i.compilation for i in outputDB],
                   open(output, 'w'), indent=4)
     else:
@@ -723,7 +725,11 @@ def CatchCompilationDatabase(opts):
                 ret[src] = list()
                 for value in AD[src]:
                     if not Default.objectfilter.match(value):
-                        value = AD[value].pop()
+                        # If `value` is not in AD, it means the asm file is its
+                        # final target, then we just use this name and
+                        # continue.
+                        # FIXME: possible uncaptured command dump
+                        value = AD[value].pop() if value in AD else value
                     if value.startswith('/tmp/'):
                         ret[value] = src + '.' + os.path.basename(value)
                         value = ret[value]
@@ -739,7 +745,10 @@ def CatchCompilationDatabase(opts):
         for cmd in CD:
             for ifile in cmd.files:
                 arguments = [cmd.compiler] + cmd.arguments
-                output = AD[cmd.output]
+                # If `cmd.output` is not in AD, it means the object or asm is
+                # not linked, then we just use this name and continue.
+                # FIXME: possible uncaptured command dump
+                output = AD[cmd.output] if cmd.output in AD else cmd.output
                 if isinstance(output, list):
                     for out in AD[cmd.output]:
                         if out in AD and AD[out] in AD[ifile]:
