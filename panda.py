@@ -552,9 +552,10 @@ class CC1Filter(Filter):
         re.compile(r'^([\w-]*g?cc|[\w-]*[gc]\+\+|clang(\+\+)?)(-[\d.]+)?$')]
     cc1abort = ['-E', '-cc1', '-cc1as', '-M', '-MM', '-###', '-fsyntax-only']
     cc1remove = [Filter.ParameterType(re.compile(r'^-[lL]'), 1),
+                 Filter.ParameterType(re.compile(r'^-M[TF]$'), 1),
                  Filter.ParameterType(re.compile(r'^-(Wl,|shared|static)'), 0),
                  Filter.ParameterType(re.compile(
-                     r'^-(v|Werror(=.+)?|Wall|Wextra|M[DFGMPQT]*|)$'), 0)]
+                     r'^-(v|Werror(=.+)?|Wall|Wextra|M[DGMPQ]*|)$'), 0)]
     cc1output = Filter.ParameterType(re.compile(r'^-o'), 1)
     cc1source = Default.sourcefilter
 
