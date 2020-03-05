@@ -413,7 +413,7 @@ def PreprocessProject(opts, cdb, ldb):
             jobList.append(
                 (RunCommand,
                  ExecutedCommand(
-                     output=i,
+                     output=oi,
                      arguments=['cp', i, oi],
                      directory=Default.execdir),
                     opts.verbose))
