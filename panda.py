@@ -400,6 +400,7 @@ def PreprocessProject(opts, cdb, ldb):
                 p = popen(args, cwd=directory, stdout=pipe, stderr=pipe)
                 for dependency in p.stdout.read().decode('utf-8').split()[1:]:
                     if dependency != '\\':
+                        dependency = os.path.join(directory, dependency)
                         projectfiles.add(dependency)
                 p.wait()
 
