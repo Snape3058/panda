@@ -299,7 +299,7 @@ def TargetJob(opts, cdb, target=None, dependencies=[]):
     if opts.fm:
         print('Generating function mapping list for {}.'.format(
             'target "{}"'.format(target) if target else 'the project'))
-        arguments = [opts.cfm, '-p', Default.execdir] + srclist
+        arguments = [opts.cfm, '-p', Default.execdir] + list(srclist)
         process = popen(arguments, cwd=outputdir, stdout=pipe, stderr=pipe)
         fms = process.stdout.read().decode('utf-8').strip('\n').split('\n')
         process.wait()
