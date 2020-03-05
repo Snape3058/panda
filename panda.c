@@ -204,6 +204,9 @@ void write_log(int fd, const char *name, pid_t ppid, pid_t pid, const char *pwd,
         case '\r':
           dprintf(fd, "\\r");
           break;
+        case '\t':
+          dprintf(fd, "\\t");
+          break;
         default:
           dprintf(fd, "%c", argv[i][j]);
           break;
