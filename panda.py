@@ -260,7 +260,7 @@ def RunCommand(command, verbose):
     outputDir = os.path.dirname(command.output)
 
     if verbose:
-        print(arguments)
+        print(command)
 
     # create directory for output file
     while not os.path.exists(outputDir):
@@ -300,6 +300,8 @@ def TargetJob(opts, cdb, target=None, dependencies=[]):
         print('Generating function mapping list for {}.'.format(
             'target "{}"'.format(target) if target else 'the project'))
         arguments = [opts.cfm, '-p', Default.execdir] + list(srclist)
+        if opts.verbose:
+            print(arguments)
         process = popen(arguments, cwd=outputdir, stdout=pipe, stderr=pipe)
         fms = process.stdout.read().decode('utf-8').strip('\n').split('\n')
         process.wait()
@@ -393,10 +395,14 @@ def PreprocessProject(opts, cdb, ldb):
             # only collect depended files of current TU, job are generated
             # below
             if opts.cp:
+                print('Collecting dependencies for target "{}".'.format(
+                    job.output))
                 args = [job.compiler] + job.arguments
                 # replace -o (rather than output) with -MT, and -c with -MM
                 args[job.oindex] = '-MT'
                 args[args.index('-c')] = '-MM'
+                if opts.verbose:
+                    print(args)
                 p = popen(args, cwd=directory, stdout=pipe, stderr=pipe)
                 for dependency in p.stdout.read().decode('utf-8').split()[1:]:
                     if dependency != '\\':
@@ -695,6 +701,8 @@ def CatchCompilationDatabase(opts):
         environ = os.environ.copy()
         environ['LD_PRELOAD'] = Default.libpath
         environ['PANDA_TEMPORARY_OUTPUT_DIR'] = outputdir
+        if opts.verbose:
+            print(opts.commands)
         popen(opts.commands, env=environ).wait()
 
         return outputdir
