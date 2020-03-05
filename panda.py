@@ -791,7 +791,11 @@ def CatchCompilationDatabase(opts):
             for outputdir, _, files in os.walk(outputdir):
                 for i in files:
                     i = os.path.join(outputdir, i)
-                    yield json.load(open(i, 'r'))
+                    try:
+                        yield json.load(open(i, 'r'))
+                    except Exception as e:
+                        print('Error while parsing "{}": {}'.format(i, str(e)))
+                        raise e
 
         print('Generating "compile_commands.json" and "link_commands.json".')
         CompilationDatabase = list()
