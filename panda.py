@@ -790,6 +790,8 @@ def CatchCompilationDatabase(opts):
         def TraverseCommands(outputdir):
             for outputdir, _, files in os.walk(outputdir):
                 for i in files:
+                    if not i.startswith('panda-exec.'):
+                        continue
                     i = os.path.join(outputdir, i)
                     try:
                         yield json.load(open(i, 'r'))
