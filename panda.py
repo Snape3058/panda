@@ -203,6 +203,8 @@ def ParseArguments(args):  # {{{
     if opts.build and not opts.commands:
         # -b, --build is provided without any arguments
         opts.commands = ['make']
+        if opts.jobs > 1:
+            opts.commands += ['-j', str(opts.jobs)]
     opts.compiling = os.path.join(Default.execdir, opts.compiling)
     opts.linking = os.path.join(Default.execdir, opts.linking)
 
