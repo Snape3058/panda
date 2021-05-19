@@ -382,8 +382,9 @@ def PreprocessProject(opts, cdb, ldb):
 
             # make command for ast/i/ll/bc job
             def MakeExecutedCommand(ext, appendargs):
+                assert(1 == len(job.files))
                 out = Default.GetPreprocessOutputName(
-                    opts.output, job.output, ext)
+                    opts.output, job.files[0], ext)
                 args = arguments + appendargs
                 args[job.oindex + 1] = out
                 jobList.append((RunCommand, ExecutedCommand(
@@ -729,7 +730,8 @@ def CatchCompilationDatabase(opts):
                         # final target, then we just use this name and
                         # continue.
                         # FIXME: possible uncaptured command dump
-                        value = AD[value].pop() if value in AD else value
+                        value = AD[value].pop() if value in AD and AD[value] \
+                                else value
                     if value.startswith('/tmp/'):
                         ret[value] = src + '.' + os.path.basename(value)
                         value = ret[value]
