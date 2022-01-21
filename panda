@@ -1,978 +1,538 @@
 #!/usr/bin/env python3
+#-*- encoding: utf-8 -*-
 
 import os
 import sys
 import json
 import argparse
-from subprocess import Popen as popen
-from subprocess import PIPE as pipe
-import re
-import shlex
-from ctypes import CDLL as openso
-import time
-from collections import namedtuple
-import textwrap
-from multiprocessing import Pool as pool
-
-ExecCommands = namedtuple('ExecCommands',
-                          ['method', 'ppid', 'pid', 'pwd', 'arguments'])
-CompilingCommands = namedtuple('CompilingCommands',
-                               ['compiler', 'directory', 'files', 'arguments',
-                                'output', 'oindex', 'compilation'])
-LinkingCommands = namedtuple('LinkingCommands',
-                             ['linker', 'directory', 'files', 'arguments',
-                              'output', 'oindex', 'archive'])
-LinkingAlias = namedtuple('LinkingAlias', ['output', 'objects', 'libraries'])
-ExecutedCommand = namedtuple('ExecutedCommand',
-                             ['output', 'arguments', 'directory'])
+import multiprocessing as mp
+import subprocess as proc
 
 
-# default configurations and strings
-class Default:  # {{{
-    # configurable names, tags, and other strings
-    panda = os.path.abspath(os.path.realpath(__file__))
-    pandadir = os.path.dirname(panda)
-    execdir = os.getcwd()
-    libname = 'libpanda.so'
-    libpath = os.path.join(pandadir, libname)
-    ast_desc = 'Clang PCH file'
-    i_desc = 'C/C++ preprocessed file'
-    ll_desc = 'LLVM IR file'
-    bc_desc = 'LLVM BitCode file'
-    fm_desc = 'Clang External Function Mapping file'
-    si_desc = 'source code index file'
-    Version = '2.0'
-    Commit = '%REPLACE_COMMIT_INFO%'
-    cc = 'clang'
-    cxx = 'clang++'
-    cfm = 'clang-extdef-mapping'
-    fmname = 'externalFnMap.txt'
-    PathTreeRoot = 'preprocess-root'
-    sourcefilter = re.compile(
-        r'^[^-].*\.(c|C|cc|CC|cxx|cpp|c\+\+|i|ii|ixx|ipp|i\+\+)$')
-    asmfilter = re.compile(r'^[^-].*\.(s|S|sx|asm)$')
-    objectfilter = re.compile(r'^[^-].*\.(o|obj)$')
-    sharedfilter = re.compile(r'^[^-].*\.(so([\d.]+)?|dll)$')
-    archivefilter = re.compile(r'^[^-].*\.(a|lib)$')
-    libraryfilter = re.compile(r'^[^-].*\.(so([\d.]+)?|dll|a|lib)$')
-    linksourcefilter = re.compile(r'^[^-].*\.(o|obj|so([\d.]+)?|dll|a|lib)$')
-
-    # program description
-    DescriptionMsg = '\n'.join(
-        ['Execute compilation database dependent commands.', ''] +
-        textwrap.wrap(
-            'This program is used for executing commands that need the '
-            'compilation flags parsed from a compilation database. Beside '
-            'customized commands, it integrates the functionalities of '
-            'generating the following types of files:',
-            width=80, break_long_words=False, break_on_hyphens=False
-        ) +
-        ['\n'.join(['  - {} ({})' for _ in range(6)]).format(
-            i_desc, '*.i for C files, and *.ii for C++ files',
-            ast_desc, '*.ast', ll_desc, '*.ll', bc_desc, '*.bc',
-            fm_desc, fmname, si_desc, '[source|ast|i|ll|bc]-index.txt'
-        ), ''] +
-        textwrap.wrap(
-            'Besides, you can also execute other commands on some translation '
-            'units. For detailed usages, please refer to the help information '
-            'of the commandline arguments below.',
-            width=80, break_long_words=False, break_on_hyphens=False
-        )
-    )
-    # program version info
-    VersionMsg = ''
-
-    @staticmethod
-    def getVersionMsg():
-        if Default.VersionMsg:
-            return Default.VersionMsg
-
-        ret = ['Panda {} (Python 3)'.format(Default.Version),
-               'git checkout: {}'.format(Default.Commit)]
-        pin, pout = os.pipe()
-        if 0 == os.fork():
-            os.dup2(pout, 1)
-            os.dup2(pout, 2)
-            os.environ['LD_PRELOAD'] = Default.libpath
-            os.environ['PANDA_TEMPORARY_OUTPUT_DIR'] = os.getcwd()
-            openso(Default.libpath).version()
-            exit(0)
-        os.close(pout)
-        pin = os.fdopen(pin, 'r', -1)
-        while True:
-            data = pin.readline()
-            if not data:
-                break
-            ret.append(data.strip())
-        Default.VersionMsg = '\n'.join(ret)
-        return Default.VersionMsg
-
-    @staticmethod
-    def GetPreprocessOutputName(outputdir, OriginOutput, sufix=''):
-        return os.path.normpath(os.path.join(outputdir, Default.PathTreeRoot,
-                                             './' + OriginOutput + sufix))
-
-    # }}}
+# Utils {{{
+def log(msg, opts=None):
+    if opts is not None and log.verbose is None:
+        log.verbose = opts.verbose
+    if log.verbose is True:
+        print('-- ' + msg, file=sys.stderr)
+log.verbose = None
 
 
-# ParseArguments: parse command line arguments with argparse.
-def ParseArguments(args):  # {{{
-    parser = argparse.ArgumentParser(
-        description=Default.DescriptionMsg,
-        formatter_class=argparse.RawTextHelpFormatter)
-    parser.add_argument(
-        '-v', '--version', action='version', version=Default.getVersionMsg())
-    parser.add_argument(
-        '-V', '--verbose', action='store_true', dest='verbose',
-        help='Verbose output mode.')
-    parser.add_argument(
-        '-b', '--build', action='store_true', dest='build',
-        help='Build the project and catch the compilation database.')
-    parser.add_argument(
-        '-c', '--capture', type=str, dest='capture', default=None,
-        help='Capture previous build command dump and continue generating.')
-    parser.add_argument(
-        'commands', nargs='*',
-        help=' '.join(['Command and arguments to be executed.',
-                       'Add "--" before the beginning of the command.',
-                       '(required when -b is enabled)']))
-    parser.add_argument(
-        '-A', '--generate-ast', action='store_true', dest='ast',
-        help='Generate ' + Default.ast_desc)
-    parser.add_argument(
-        '-E', '--generate-i', action='store_true', dest='i',
-        help='Generate ' + Default.i_desc)
-    parser.add_argument(
-        '-S', '--generate-ll', action='store_true', dest='ll',
-        help='Generate ' + Default.ll_desc)
-    parser.add_argument(
-        '-B', '--generate-bc', action='store_true', dest='bc',
-        help='Generate ' + Default.bc_desc)
-    parser.add_argument(
-        '-M', '--generate-fm', action='store_true', dest='fm',
-        help='Generate ' + Default.fm_desc)
-    parser.add_argument(
-        '-L', '--list-files', action='store_true', dest='ls',
-        help='Generate a list for each kind of generated files.')
-    parser.add_argument(
-        '-P', '--copy-file', action='store_true', dest='cp',
-        help='Copy source code file to output directory.')
-    parser.add_argument(
-        '-T', '--target-related', action='store_true', dest='target',
-        help='Generate target related compile_commands.json and file lists.')
-    parser.add_argument(
-        '-o', '--output', type=str, dest='output', default=Default.execdir,
-        help='Customize the output directory. (default is "./")')
-    parser.add_argument(
-        '--compiling', metavar='<compile_commands.json>', type=str,
-        dest='compiling', default=os.path.abspath('./compile_commands.json'),
-        help='Customize the compiling database file.')
-    parser.add_argument(
-        '--linking', metavar='<link_commands.json>', type=str,
-        dest='linking', default=os.path.abspath('./link_commands.json'),
-        help='Customize the linking database file.')
-    parser.add_argument(
-        '--cc', type=str, dest='cc', default=Default.cc,
-        help='Customize the C compiler. (default is clang)')
-    parser.add_argument(
-        '--cxx', type=str, dest='cxx', default=Default.cxx,
-        help='Customize the C++ compiler. (default is clang++)')
-    parser.add_argument(
-        '--cfm', metavar='<clang-func-mapping>', type=str,
-        dest='cfm', default=Default.cfm,
-        help='Customize the function mapping scanner. (default is '
-        'clang-func-mapping)')
-    parser.add_argument(
-        '--fm-name', metavar='<{}>'.format(Default.fmname), type=str,
-        dest='fmname', default=Default.fmname,
-        help='Customize the output filename of the {}. (default is {})'.format(
-            Default.fm_desc, Default.fmname))
-    parser.add_argument(
-        '-p', '--clang-path', metavar='CLANG_PATH', type=str, dest='clang',
-        help='Customize the compiler executable directory for searching.')
-    parser.add_argument(
-        '-j', '--jobs', type=int, dest='jobs', default=1,
-        help='Customize the number of jobs allowed in parallel.')
-    parser.add_argument(
-        '--ctu', action='store_true', dest='ctu',
-        help='Prepare for cross-TU analysis, (alias to -A and -M)')
-    opts = parser.parse_args(args[1:])
+def fatal(msg): sys.exit('-- ' + msg)
+def warn(msg): print('-- ' + msg, file=sys.stderr)
 
-    # set alias for --ctu
-    if opts.ctu:
-        opts.fm = True
-        opts.ast = True
 
-    if opts.build and not opts.commands:
-        # -b, --build is provided without any arguments
-        opts.commands = ['make']
-        if opts.jobs > 1:
-            opts.commands += ['-j', str(opts.jobs)]
-    opts.compiling = os.path.join(Default.execdir, opts.compiling)
-    opts.linking = os.path.join(Default.execdir, opts.linking)
-
-    if opts.capture:
-        if not os.path.isdir(opts.capture):
-            print('Unable to capture: directory "{}" does not exist.'.format(
-                opts.capture), file=sys.stderr)
-            exit(2)
-
-    opts.output = os.path.abspath(opts.output)
-    has_output = [opts.build, opts.ast, opts.i, opts.ll, opts.bc, opts.fm,
-                  opts.ls, opts.cp]
-    if not os.path.exists(opts.output) and any(has_output):
-        os.makedirs(opts.output)
-
-    # reset executable path for --clang-path
-    if opts.clang:
-        # If cc, cxx and cfm are set with full path, the settings will be used.
-        # Otherwise, it will be merged with clang path.
-        # Function os.path.join will handle this feature.
-        opts.cc = os.path.abspath(os.path.join(opts.clang, opts.cc))
-        opts.cxx = os.path.abspath(os.path.join(opts.clang, opts.cxx))
-        opts.cfm = os.path.abspath(os.path.join(opts.clang, opts.cfm))
-    CC1JsonFilter.setCompilers(opts.cc, opts.cxx)
-
-    # check whether the command executable exists and is executable
-    def checkCommandExecutable(cmd, opt):
+def mkdir(dirname):
+    log('!: mkdir -p %s' % dirname)
+    if not os.path.exists(dirname):
         try:
-            popen([cmd, '--version'], stdout=pipe, stderr=pipe).wait()
-        except OSError as err:
-            print(
-                '\n'.join([
-                    'Error:\tRequired tool "{}" not available.',
-                    '\tPlease check your settings of "{}" or "--clang-path".',
-                    'popen: {}']).format(
-                    os.path.basename(cmd), opt, err),
-                file=sys.stderr)
-            exit(err.errno)
-
-    if opts.fm:
-        checkCommandExecutable(opts.cfm, '--cfm')
-    if opts.ast or opts.i or opts.ll or opts.bc:
-        checkCommandExecutable(opts.cc, '--cc')
-        checkCommandExecutable(opts.cxx, '--cxx')
-
-    return opts
-
-    # }}}
-
-
-# RunCommand: run the command to do the preprocess
-#
-#   command: the command object to be executed. (in the parsed JSON format)
-#   verbose: dump the command to be executed.
-def RunCommand(command, verbose):
-    print('Generating "' + command.output + '"')
-
-    arguments = command.arguments
-    outputDir = os.path.dirname(command.output)
-
-    if verbose:
-        print(command)
-
-    # create directory for output file
-    while not os.path.exists(outputDir):
-        try:
-            os.makedirs(outputDir)
+            os.makedirs(dirname)
         except FileExistsError:  # may happen when multi-thread
             pass
 
-    process = popen(arguments, cwd=command.directory)
-    process.wait()
 
-
-# TargetJob: the job of every link target.
-#
-#   opts: opts object (refer to ParseArguments)
-#   cdb: the compilation database struct
-#   target: the filename of the link target
-#   dependencies: the files that the target depends on
-#   - keep target=None and dependencies=[] if the job is for target `all'
-def TargetJob(opts, cdb, target=None, dependencies=[]):
-    outputDB = None
-    outputdir = opts.output
-    if target:
-        print('Generating "compile_commands.json" for target "{}".'
-              .format(target))
-        outputdir = Default.GetPreprocessOutputName(outputdir, target)
-        if not os.path.exists(outputdir):
-            os.makedirs(outputdir)
-        output = os.path.join(outputdir, 'compile_commands.json')
-        # If the dependency is not in cdb, just ignore it.
-        # FIXME: possible uncaptured command dump
-        outputDB = [cdb[i] for i in dependencies if i in cdb]
-        json.dump([i.compilation for i in outputDB],
-                  open(output, 'w'), indent=4)
-    else:
-        outputDB = [cdb[i] for i in cdb]
-    srclist = {src for t in outputDB for src in t.files}
-    if opts.fm:
-        print('Generating function mapping list for {}.'.format(
-            'target "{}"'.format(target) if target else 'the project'))
-        arguments = [opts.cfm, '-p', Default.execdir] + list(srclist)
-        if opts.verbose:
-            print(arguments)
-        process = popen(arguments, cwd=outputdir, stdout=pipe, stderr=pipe)
-        fms = process.stdout.read().decode('utf-8').strip('\n').split('\n')
-        process.wait()
-        with open(os.path.join(outputdir, opts.fmname), 'w') as ffm:
-            for func in fms:
-                func = func.split()
-                if func:
-                    print(func[0], Default.GetPreprocessOutputName(
-                        opts.output, func[1], '.ast'), file=ffm)
-    if opts.ls:
-        print('Generating file lists for {}.'.format(
-            'target "{}"'.format(target) if target else 'the project'))
-        with open(os.path.join(outputdir, 'source-index.txt'), 'w') as fsrc:
-            for i in srclist:
-                print(i, file=fsrc)
-        fast = open(os.path.join(outputdir, 'ast-index.txt')
-                    if opts.ast else os.devnull, 'w')
-        fi = open(os.path.join(outputdir, 'i-index.txt')
-                  if opts.i else os.devnull, 'w')
-        fll = open(os.path.join(outputdir, 'll-index.txt')
-                   if opts.ll else os.devnull, 'w')
-        fbc = open(os.path.join(outputdir, 'bc-index.txt')
-                   if opts.bc else os.devnull, 'w')
-        for t in outputDB:
-            print(
-                Default.GetPreprocessOutputName(opts.output, t.output, '.ast'),
-                file=fast)
-            print(
-                Default.GetPreprocessOutputName(
-                    opts.output,
-                    t.output,
-                    '.i' if t.compiler == opts.cc else '.ii'),
-                file=fi)
-            print(
-                Default.GetPreprocessOutputName(opts.output, t.output, '.ll'),
-                file=fll)
-            print(
-                Default.GetPreprocessOutputName(opts.output, t.output, '.bc'),
-                file=fbc)
-        for f in (fast, fi, fll, fbc):
-            f.close()
-
-
-# threadjob: Execute func with args and return its return value.
-def threadjob(func, *args):
-    return func(*args)
-
-
-# PreprocessProject: monitor and control the process of preprocess
-#
-#   opts: opts object (refer to ParseArguments)
-#   cdb: compiling commands
-#   ldb: linking commands
-def PreprocessProject(opts, cdb, ldb):
-    if not cdb:
-        return
-
-    jobList = list()
-
-    # Traverse compliation database, create job for each TU.
-    def MakePreprocessJob():
-        projectfiles = set()
-
-        def MakeExecutedCommandForOneJob(job):
-            directory = job.directory
-            arguments = [job.compiler] + job.arguments
-
-            # make command for ast/i/ll/bc job
-            def MakeExecutedCommand(ext, appendargs):
-                assert(1 == len(job.files))
-                out = Default.GetPreprocessOutputName(
-                    opts.output, job.files[0], ext)
-                args = arguments + appendargs
-                args[job.oindex + 1] = out
-                jobList.append((RunCommand, ExecutedCommand(
-                    output=out, arguments=args, directory=directory),
-                    opts.verbose))
-            if opts.ast:
-                MakeExecutedCommand('.ast', ['-emit-ast'])
-            if opts.i:
-                MakeExecutedCommand('.i' if job.compiler == opts.cc else '.ii',
-                                    ['-E'])
-            if opts.ll:
-                MakeExecutedCommand(
-                    '.ll', [
-                        '-emit-llvm', '-S', '-Xclang', '-disable-O0-optnone'])
-            if opts.bc:
-                MakeExecutedCommand(
-                    '.bc', [
-                        '-emit-llvm', '-Xclang', '-disable-O0-optnone'])
-
-            # only collect depended files of current TU, job are generated
-            # below
-            if opts.cp:
-                print('Collecting dependencies for target "{}".'.format(
-                    job.output))
-                args = [job.compiler] + job.arguments
-                # replace -o (rather than output) with -MT, and -c with -MM
-                args[job.oindex] = '-MT'
-                args[args.index('-c')] = '-MM'
-                if opts.verbose:
-                    print(args)
-                p = popen(args, cwd=directory, stdout=pipe, stderr=pipe)
-                for dependency in p.stdout.read().decode('utf-8').split()[1:]:
-                    if dependency != '\\':
-                        dependency = os.path.join(directory, dependency)
-                        projectfiles.add(dependency)
-                p.wait()
-
-        # MakePreprocessJob:
-        for originOutput in cdb:
-            job = cdb[originOutput]
-            MakeExecutedCommandForOneJob(job)
-        for i in projectfiles:
-            oi = Default.GetPreprocessOutputName(opts.output, i)
-            jobList.append(
-                (RunCommand,
-                 ExecutedCommand(
-                     output=oi,
-                     arguments=['cp', i, oi],
-                     directory=Default.execdir),
-                    opts.verbose))
-
-    # Generate pre-process file list
-    MakePreprocessJob()
-
-    # Generate target-related compile_commands
-    dependency = dict()
-
-    # Traverse linking database, create job for each link target.
-    def DeductTargets():
-        if not ldb:
-            return
-
-        def DeductOneTarget(target):
-            if target.output not in dependency:
-                dependency[target.output] = target.objects.copy()
-                if target.libraries:
-                    for lib in target.libraries:
-                        dependency[target.output] += DeductOneTarget(ldb[lib])
-            return dependency[target.output]
-        for tout in ldb:
-            DeductOneTarget(ldb[tout])
-
-    if opts.target:
-        DeductTargets()
-        for t in dependency:
-            jobList.append((TargetJob, opts, cdb, t, dependency[t]))
-
-    # TargetJob for all the source files
-    jobList.append((TargetJob, opts, cdb))
-
-    # Do parallel job:
-    if 1 == opts.jobs:
-        for i in jobList:
-            threadjob(*i)
-    else:
-        with pool(opts.jobs) as p:
-            p.starmap(threadjob, jobList)
-
-
-class Filter:
-    FilterType = namedtuple(
-        'FilterType', [
-            'execfilter', 'abort', 'remove', 'output', 'source'])
-    ParameterType = namedtuple('ParameterType', ['matcher', 'count'])
-
-    def __init__(self, filters):
-        self.filters = filters
-        self.exe = None
-        self.files = None
+class CompileCommands:
+    def __init__(self, ccmd=None):
+        self.compiler = None
+        self.file = None
+        self.directory = None
         self.arguments = None
-        self.output = None
+        self.language = None
+        if ccmd:
+            self.parse(ccmd)
 
-    @staticmethod
-    def MatchParameter(matcher, count, arg, i):
-        match = matcher.match(arg)
-        if not match:
+    def __str__(self):
+        return json.dumps(
+                {
+                    'arguments': self.arguments,
+                    'directory': self.directory,
+                    'file': self.file,
+                    'compiler': self.compiler,
+                    'language': self.language,
+                }, indent=4)
+
+    def parse(self, ccmd):
+        # Check the validity of a compile command.
+        if not CompileCommands.isValidCompileCommand(ccmd):
+            warn('W: Invalid compile command object.\n' +
+                     json.dumps(ccmd, indent=4))
             return None
-        ret = [match.group(0)]
-        if match.group(0) != arg:
-            ret.append(arg[match.end():])
-            count -= 1
-        for _ in range(count):
-            ret.append(next(i))
-        return ret
 
-    def MatchExecFilterIndex(self, exe):
-        exe = os.path.basename(exe)
-        for efi in range(len(self.filters.execfilter)):
-            if self.filters.execfilter[efi].fullmatch(exe):
-                return efi
-        return None
+        # directoy and file
+        self.directory = os.path.abspath(ccmd['directory'])
+        self.file = os.path.join(self.directory, ccmd['file'])
 
-    def MatchExec(self, exe):
-        return exe if self.MatchExecFilterIndex(exe) is not None else None
-
-    def MatchAbort(self, arg):
-        return arg in self.filters.abort
-
-    def MatchRemove(self, arg, i):
-        for rm in self.filters.remove:
-            match = Filter.MatchParameter(rm.matcher, rm.count, arg, i)
-            if match:
-                return True
-        return False
-
-    def MatchOutput(self, arg, i):
-        return Filter.MatchParameter(self.filters.output.matcher,
-                                     self.filters.output.count, arg, i)
-
-    def MatchSource(self, arg, pwd):
-        arg = os.path.join(pwd, arg)
-        match = self.filters.source.match(os.path.basename(arg))
-        if match and (os.path.exists(arg) or arg.startswith('/tmp/')):
-            return arg
+        # File type: clang::driver::types::lookupTypeForExtension
+        extname = os.path.splitext(self.file)[1][1:]
+        if extname == 'c':
+            self.language = 'c'
+        elif extname in {'C', 'cc', 'CC', 'cp', 'cpp', 'CPP',
+                'cxx', 'CXX', 'c++', 'C++'}:
+            self.language = 'c++'
+#       elif extname == 'i':
+#           self.language = 'PP-C'
+#       elif extname == 'ii':
+#           self.language = 'PP-C++'
         else:
-            return None
+            self.language = 'Unknown'
 
-    def ParseExecutionCommands(self, arguments, pwd):
-        args = iter(arguments)
-        self.exe = self.MatchExec(next(args))
-        if not self.exe:
-            return None
-        self.pwd = pwd
-        self.files = list()
-        self.arguments = list()
-        self.output = None
-        for arg in args:
-            if self.filters.abort and self.MatchAbort(arg):
-                return None
-            if not self.filters.remove or not self.MatchRemove(arg, args):
-                if self.filters.output:
-                    target = self.MatchOutput(arg, args)
-                    if target:
-                        self.output = os.path.join(pwd, target[-1])
-                        if 1 != len(target):
-                            self.arguments += target[:-1]
-                        self.arguments.append(self.output)
-                        continue
-                if self.filters.source:
-                    src = self.MatchSource(arg, pwd)
-                    if src:
-                        self.files.append(src)
-                        self.arguments.append(src)
-                        continue
-                # finally: add all un-matched arguments
-                self.arguments.append(arg)
-        return (self.exe, self.pwd, self.files, self.arguments, self.output,
-                self.arguments.index(self.output) if self.output else None)
+        # command => arguments
+        arguments = None
+        if 'command' in ccmd:
+            from shlex import split
+            arguments = split(ccmd['command'])
+        else:
+            arguments = ccmd['arguments']
 
+        # compiler
+        self.compiler = arguments[0]
 
-class CC1Filter(Filter):
-    cc1filter = [
-        re.compile(r'^([\w-]*g?cc|[\w-]*[gc]\+\+|clang(\+\+)?)(-[\d.]+)?$')]
-    cc1abort = ['-E', '-cc1', '-cc1as', '-M', '-MM', '-###', '-fsyntax-only']
-    cc1remove = [Filter.ParameterType(re.compile(r'^-[lL]'), 1),
-                 Filter.ParameterType(re.compile(r'^-M[TF]$'), 1),
-                 Filter.ParameterType(re.compile(r'^-(Wl,|shared|static)'), 0),
-                 Filter.ParameterType(re.compile(
-                     r'^-(v|Werror(=.+)?|Wall|Wextra|M[DGMPQ]*|)$'), 0)]
-    cc1output = Filter.ParameterType(re.compile(r'^-o'), 1)
-    cc1source = Default.sourcefilter
-
-    def __init__(self):
-        super().__init__(Filter.FilterType(
-            execfilter=CC1Filter.cc1filter, abort=CC1Filter.cc1abort,
-            remove=CC1Filter.cc1remove, output=CC1Filter.cc1output,
-            source=CC1Filter.cc1source))
-
-    @staticmethod
-    def MatchArguments(arguments, pwd):
-        Self = CC1Filter()
-        result = Self.ParseExecutionCommands(arguments, pwd)
-        return CompilingCommands(
-            compiler=result[0],
-            directory=result[1],
-            files=result[2],
-            arguments=result[3],
-            output=result[4],
-            oindex=result[5],
-            compilation='-c' in result[3]) if result else None
-
-    @staticmethod
-    def getTargetID(name):
-        return ''.join([os.path.dirname(name)[-1],
-                        '.', os.path.basename(name)])
-
-    @staticmethod
-    def reformatInputFile(ifile, arguments, files, compilation):
-        for rm in files:
-            if rm == ifile:
-                if not compilation:
-                    arguments.insert(arguments.index(ifile), '-c')
-            else:
-                arguments.remove(rm)
-
-
-class ARFilter(Filter):
-    arfilter = [re.compile(r'^[\w-]*ar(-[\d.]+)?$')]
-    aroutput = Default.archivefilter
-    arsource = Default.objectfilter
-
-    def __init__(self):
-        super().__init__(Filter.FilterType(
-            execfilter=ARFilter.arfilter, abort=None, remove=None,
-            output=ARFilter.aroutput, source=ARFilter.arsource))
-
-    def MatchOutput(self, arg, i):
-        return [arg] if self.filters.output.match(arg) else None
-
-    @staticmethod
-    def MatchArguments(arguments, pwd):
-        Self = ARFilter()
-        result = Self.ParseExecutionCommands(arguments, pwd)
-        return LinkingCommands(
-            linker=result[0],
-            directory=result[1],
-            files=result[2],
-            arguments=result[3],
-            output=result[4],
-            oindex=result[5],
-            archive=True) if result else None
-
-
-class LDFilter(Filter):
-    ldfilter = [re.compile(r'^[\w-]*ld(-[\d.]+)?$')]
-    ldoutput = Filter.ParameterType(re.compile(r'^-o'), 1)
-    ldsource = Default.linksourcefilter
-
-    def __init__(self):
-        super().__init__(Filter.FilterType(
-            execfilter=LDFilter.ldfilter, abort=None, remove=None,
-            output=LDFilter.ldoutput, source=LDFilter.ldsource))
-
-    @staticmethod
-    def MatchArguments(arguments, pwd):
-        Self = LDFilter()
-        result = Self.ParseExecutionCommands(arguments, pwd)
-        return LinkingCommands(
-            linker=result[0],
-            directory=result[1],
-            files=result[2],
-            arguments=result[3],
-            output=result[4],
-            oindex=result[5],
-            archive=False) if result else None
-
-
-class AliasFilter:
-    AliasFilterType = namedtuple('AliasFilterType', ['exe', 'input', 'output'])
-    clangfilter = AliasFilterType(
-        re.compile(r'^clang(-[\d.]+)?$'),
-        re.compile(r'^-main-file-name$'),
-        re.compile(r'^-o'))
-    cc1filter = AliasFilterType(re.compile(r'^[\w-]*cc1(plus)?(-[\d.]+)?$'),
-                                re.compile(r'^-dumpbase$'), re.compile(r'^-o'))
-    asfilter = AliasFilterType(re.compile(r'^[\w-]*as(-[\d.]+)?$'),
-                               Default.asmfilter, re.compile(r'^-o'))
-
-    @staticmethod
-    def MatchArguments(arguments, pwd):
-        argfilter, ifile, ofile = None, None, None
-        args = iter(arguments)
-        exename = os.path.basename(next(args))
-        if AliasFilter.clangfilter.exe.match(exename) and '-cc1' == next(args):
-            argfilter = AliasFilter.clangfilter
-        elif AliasFilter.cc1filter.exe.match(exename):
-            argfilter = AliasFilter.cc1filter
-        elif AliasFilter.asfilter.exe.match(exename):
-            argfilter = AliasFilter.asfilter
-        if not argfilter:
-            return None
-        for i in args:
-            imatch = argfilter.input.match(i)
-            omatch = argfilter.output.match(i)
-            if imatch:
-                ifile = next(args) if '-' == imatch.group(0)[0] \
-                    else imatch.group(0)
-            elif omatch:
-                ofile = next(args) if '-' == omatch.group(0)[0] \
-                    else omatch.group(0)
-        return {os.path.join(pwd, ifile): [os.path.join(pwd, ofile)]} \
-            if ifile and ofile else None
-
-
-def CatchCompilationDatabase(opts):
-    def BuildProject(opts):
-        print('Compiling the project: ' + ' '.join(opts.commands))
-        outputdir = os.path.abspath(
-            os.path.join(
-                opts.output,
-                time.strftime(
-                    '%Y%m%d_%H%M%S.build',
-                    time.localtime())))
-        os.makedirs(outputdir)
-
-        environ = os.environ.copy()
-        environ['LD_PRELOAD'] = Default.libpath
-        environ['PANDA_TEMPORARY_OUTPUT_DIR'] = outputdir
-        if opts.verbose:
-            print(opts.commands)
-        popen(opts.commands, env=environ).wait()
-
-        return outputdir
-
-    def SimplifyAlias(AD):
-        ret = dict()
-        for src in AD:
-            if Default.sourcefilter.match(src):
-                ret[src] = list()
-                for value in AD[src]:
-                    if not Default.objectfilter.match(value):
-                        # If `value` is not in AD, it means the asm file is its
-                        # final target, then we just use this name and
-                        # continue.
-                        # FIXME: possible uncaptured command dump
-                        value = AD[value].pop() if value in AD and AD[value] \
-                                else value
-                    if value.startswith('/tmp/'):
-                        ret[value] = src + '.' + os.path.basename(value)
-                        value = ret[value]
-                    else:
-                        ret[value] = value
-                    ret[src].append(value)
-            elif not Default.asmfilter.match(src):
-                ret[src] = AD[src]
-        return ret
-
-    def ConstructCompilationDatabase(CD, AD):
-        ret = list()
-        for cmd in CD:
-            for ifile in cmd.files:
-                arguments = [cmd.compiler] + cmd.arguments
-                # If `cmd.output` is not in AD, it means the object or asm is
-                # not linked, then we just use this name and continue.
-                # FIXME: possible uncaptured command dump
-                output = AD[cmd.output] if cmd.output in AD else cmd.output
-                if isinstance(output, list):
-                    for out in AD[cmd.output]:
-                        if out in AD and AD[out] in AD[ifile]:
-                            output = AD[out]
-                            break
-                arguments[cmd.oindex + 1] = output
-                CC1Filter.reformatInputFile(ifile, arguments, cmd.files,
-                                            cmd.compilation)
-                ret.append({'output': output, 'directory': cmd.directory,
-                            'file': ifile, 'arguments': arguments})
-        with open(os.path.join(opts.output, 'compile_commands.json'), 'w') \
-                as f:
-            json.dump(ret, f, indent=4)
-        return ret
-
-    def ConstructLinkingDatabase(LD, AD):
-        ret = list()
-        for cmd in LD:
-            objs, archs, sobjs = list(), list(), list()
-            for ifile in cmd.files.copy():
-                if ifile in AD:
-                    if Default.objectfilter.match(ifile):
-                        objs.append(AD[ifile])
-                        cmd.arguments[cmd.arguments.index(ifile)] = AD[ifile]
-                        cmd.files[cmd.files.index(ifile)] = AD[ifile]
-                    elif Default.sharedfilter.match(ifile):
-                        sobjs.append(ifile)
-                    else:
-                        archs.append(ifile)
-                else:
-                    cmd.files.remove(ifile)
-            if not objs and not archs and not sobjs:
+        # Adjust arguments.
+        i, n = 0, len(arguments)
+        self.arguments = []
+        prune1 = {'-c', '-fsyntax-only', '-save-temps'}
+        prune2 = {'-o', '-MF', '-MT', '-MQ'}
+        while True:
+            i += 1
+            if i >= n:
+                break
+            if arguments[i] in prune1:
                 continue
-            lo = {'output': cmd.output, 'directory': cmd.directory,
-                  'arguments': [cmd.linker] + cmd.arguments}
-            if objs:
-                lo['objects'] = objs
-            if archs:
-                lo['archives'] = archs
-            if sobjs:
-                lo['shareds'] = sobjs
-            ret.append(lo)
-        with open(os.path.join(opts.output, 'link_commands.json'), 'w') as f:
-            json.dump(ret, f, indent=4)
-        return ret
-
-    def HandleCompileCommands(outputdir):
-        def TraverseCommands(outputdir):
-            for outputdir, _, files in os.walk(outputdir):
-                for i in files:
-                    if not i.startswith('panda-exec.'):
-                        continue
-                    i = os.path.join(outputdir, i)
-                    try:
-                        yield json.load(open(i, 'r'))
-                    except Exception as e:
-                        print('Error while parsing "{}": {}'.format(i, str(e)))
-                        raise e
-
-        print('Generating "compile_commands.json" and "link_commands.json".')
-        CompilationDatabase = list()
-        LinkingDatabase = list()
-        AliasDatabase = dict()
-        for i in TraverseCommands(outputdir):
-            exe = ExecCommands(**i)
-            cd = CC1Filter.MatchArguments(exe.arguments, exe.pwd)
-            if cd and cd.files:
-                CompilationDatabase.append(cd)
+            if arguments[i] in prune2:
+                i += 1
                 continue
-            ar = ARFilter.MatchArguments(exe.arguments, exe.pwd)
-            if ar and ar.files:
-                LinkingDatabase.append(ar)
-                AliasDatabase[ar.output] = ar.files
+            if arguments[i][:3] == '-o=' or arguments[i][:2] == '-M':
                 continue
-            ld = LDFilter.MatchArguments(exe.arguments, exe.pwd)
-            if ld and ld.files:
-                LinkingDatabase.append(ld)
-                AliasDatabase[ld.output] = ld.files
-                continue
-            al = AliasFilter.MatchArguments(exe.arguments, exe.pwd)
-            if al:
-                for k in al:
-                    if k in AliasDatabase:
-                        AliasDatabase[k] += al[k]
-                    else:
-                        AliasDatabase[k] = al[k]
-                continue
-        AliasDatabase = SimplifyAlias(AliasDatabase)
-        CDJson = ConstructCompilationDatabase(
-            CompilationDatabase, AliasDatabase)
-        LDJson = ConstructLinkingDatabase(LinkingDatabase, AliasDatabase)
-        with open(os.path.join(outputdir, 'name_mapping.json'), 'w') as f:
-            json.dump(AliasDatabase, f, indent=4)
-        return (CDJson, LDJson)
+            self.arguments.append(arguments[i])
+            # Reset language if provided in command line arguments.
+            if arguments[i] == '-x':
+                self.language = arguments[i + 1]
+            elif arguments[i][:2] == '-x':
+                self.language = arguments[i][2:]
 
-    # CatchCompilationDatabase:
-    dump = BuildProject(opts) if opts.build else opts.capture
-    return HandleCompileCommands(dump)
+        return self
 
-
-class CC1JsonFilter(Filter):
-    cc1filter = [re.compile(r'^([\w-]*g?cc|clang)(-[\d.]+)?$'),
-                 re.compile(r'^([\w-]*[gc]\+\+|clang\+\+)(-[\d.]+)?$')]
-    cc1compiler = [Default.cc, Default.cxx]
-
-    cc1remove = CC1Filter.cc1remove + [
-        Filter.ParameterType(re.compile(r'^-(w|g|O([0123sg]|fast)?)$'), 0)]
-
-    cc1append = ['-w', '-g', '-O0']
 
     @staticmethod
-    def setCompilers(cc, cxx):
-        CC1JsonFilter.cc1compiler = [cc, cxx]
-
-    def __init__(self):
-        super().__init__(Filter.FilterType(
-            execfilter=CC1JsonFilter.cc1filter, abort=CC1Filter.cc1abort,
-            remove=CC1JsonFilter.cc1remove, output=CC1Filter.cc1output,
-            source=CC1Filter.cc1source))
-
-    def MatchExec(self, exe):
-        index = self.MatchExecFilterIndex(exe)
-        return None if index is None else CC1JsonFilter.cc1compiler[index]
-
-    @staticmethod
-    def MatchArguments(job):
-        Self = CC1JsonFilter()
-        result = Self.ParseExecutionCommands(
-            job['arguments'], job['directory'])
-        output = result[4]
-        if not Default.objectfilter.match(output):
-            target = CC1Filter.getTargetID(output)
-            output = ''.join([job['file'], '.', target, '.o'])
-            result[3][result[5]] = output
-        return CompilingCommands(compiler=result[0], directory=result[1],
-                                 files=result[2], arguments=result[3] +
-                                 CC1JsonFilter.cc1append,
-                                 output=output, oindex=result[5],
-                                 # Different with CC1Filter, CC1JsonFilter
-                                 # will fill compilation field with the
-                                 # original CompilingCommands.
-                                 compilation=job) \
-            if result else None
-
-    @staticmethod
-    def getCompilerType(name):
-        Self = CC1Filter()
-        return Self.MatchExec(name)
+    def isValidCompileCommand(ccmd):
+        return 'file' in ccmd and 'directory' in ccmd and \
+                ('arguments' in ccmd or 'command' in ccmd)
 
 
-# ParseCompilationCommands: parse the database objects
-#
-#   opts: opts object (refer to ParseArguments)
-def ParseCompilationCommands(CDList, LDList):
-    def ParseCDList(CDList):
-        if not CDList:
+class TaskPool:
+    def __init__(self, count=0):
+        assert count > 0, 'Invalid pool size.'
+        self.procs = []
+        self.stop = 0x42424242
+        self.tasks = mp.Queue()
+        for i in range(count):
+            proc = mp.Process(target=self._run_task)
+            proc.daemon = True
+            proc.start()
+            self.procs.append(proc)
+
+    def addTask(self, *args):
+        self.tasks.put(args)
+
+    def join(self):
+        for i in self.procs:
+            self.tasks.put(self.stop)
+        for i in self.procs:
+            i.join()
+
+    def _run_task(self):
+        while True:
+            args = self.tasks.get()
+            if args == self.stop:
+                break
+            (lambda action, *args: action(*args))(*args)
+
+
+class CompilerActionControl:
+    def __init__(self, title, args, extname=None):
+        self.title = title
+        self.args = args
+        if extname:
+            self.hasOutput = True
+            self.extname = extname
+            assert isinstance(self.extname, str) or \
+                    isinstance(self.extname, list), \
+                    'Index "extname" can only be string or list'
+        else:
+            self.hasOutput = False
+
+    def getOutputExtensionName(self, language):
+        if not self.hasOutput:
             return None
-        cdret = dict()
-        for job in CDList:
-            # convert 'command' to 'arguments'
-            if 'command' in job:
-                job['arguments'] = shlex.split(job.pop('command'))
-            job['file'] = os.path.join(job['directory'], job['file'])
-            parsed = CC1JsonFilter.MatchArguments(job)
-            CC1Filter.reformatInputFile(
-                job['file'],
-                parsed.arguments,
-                parsed.files,
-                '-c' in parsed.arguments)
-            cdret[parsed.output] = parsed
-        return cdret
-
-    def ParseLDList(LDList):
-        if not LDList:
-            return None
-        ldret = dict()
-        for job in LDList:
-            if 'command' in job:
-                job['arguments'] = shlex.split(job.pop('command'))
-            job['output'] = os.path.join(job['directory'], job['output'])
-
-            def joinDirectory(job, item):
-                if item in job:
-                    for i in range(len(job[item])):
-                        job[item][i] = os.path.join(
-                            job['directory'], job[item][i])
-            joinDirectory(job, 'objects')
-            joinDirectory(job, 'archives')
-            joinDirectory(job, 'shareds')
-            ldret[job['output']] = LinkingAlias(
-                output=job['output'], objects=job['objects'],
-                libraries=(job['archives'] if 'archives' in job else [] +
-                           job['shareds'] if 'shareds' in job else []))
-        return ldret
-
-    return ParseCDList(CDList), ParseLDList(LDList)
+        if isinstance(self.extname, str):
+            return self.extname
+        if language == 'c':
+            return self.extname[0]
+        if language == 'c++':
+            return self.extname[1]
+        assert False, 'UNREACHABLE: cannot determine extname.'
 
 
-def main(args):
-    opts = ParseArguments(args)
-    cj, lj = None, None
-    if opts.build or opts.capture:
-        cj, lj = CatchCompilationDatabase(opts)
+class ClangToolActionControl:
+    def __init__(self, title, tool, args, extname=None, stdout=None,
+            stderr=None):
+        self.title = title
+        self.tool = tool
+        self.args = args
+        self.extname = extname
+        self.stdout = stdout
+        self.stderr = stderr
+        assert not (self.stdout and self.stderr), \
+                'Cannot accept both stdout and stderr as output.'
+        if self.extname:
+            assert self.stdout or self.stderr, \
+                    'Capture output from either stdout or stderr'
+
+
+class Default:
+    OutputPath = './panda-output'
+    CCompiler = 'clang'
+    CXXCompiler = 'clang++'
+    ExtDefMapper = 'clang-extdef-mapping'
+    CompilationDatabase = os.path.abspath('./compile_commands.json')
+    ExternalFunctionMap = 'externalDefMap.txt'
+    InvocationList = 'invocations.yaml'
+    InputFileList = 'inputs.ifl'
+
+    SelfPath = os.path.realpath(__file__)
+
+    ProgramDescriptionMsg = 'A simple driver for pipelining tools based on ' \
+                            'compilation database.'
+# }}}
+
+
+def ParseArguments(argv): # {{{
+    Panda = argv[0]
+    Parser = argparse.ArgumentParser(
+            prog='panda', formatter_class=argparse.RawTextHelpFormatter,
+            description=Default.ProgramDescriptionMsg)
+    Parser.add_argument('--verbose', action='store_true', dest='verbose',
+                        help='Verbose output for debug.')
+    Parser.add_argument('-f', '--compilation-database', type=str, dest='cdb',
+                        help='Customize the input compilation database',
+                        default=Default.CompilationDatabase)
+    Parser.add_argument('-j', '--jobs', type=int, dest='jobs', default=1,
+                        help='Number of jobs can be executed in parallel.')
+    Parser.add_argument('-o', '--output', type=str, dest='output',
+                        default=Default.OutputPath,
+                        help='Write output files to directory.')
+
+    Parser.add_argument(
+            '-X', '--syntax', action='store_true', dest='syntax',
+            help='Test arguments and source code for frontend errors.')
+    Parser.add_argument(
+            '-C', '--compile', action='store_true', dest='genobj',
+            help='Recompile the source file.')
+    Parser.add_argument(
+            '-E', '--preprocess', action='store_true', dest='genii',
+            help='Generate the preprocessed source file dump.')
+    Parser.add_argument(
+            '-A', '--gen-ast', action='store_true', dest='genast',
+            help='Generate the Clang PCH format source file dump.')
+    Parser.add_argument(
+            '-B', '--gen-bc', action='store_true', dest='genbc',
+            help='Generate the target LLVM bitcode.')
+    Parser.add_argument(
+            '-R', '--gen-ll', action='store_true', dest='genll',
+            help='Generate the target LLVM IR text code.')
+    Parser.add_argument(
+            '-S', '--gen-asm', action='store_true', dest='genasm',
+            help='Generate the target assembly code.')
+    Parser.add_argument(
+            '-M', '--gen-extdef-mapping', action='store_true', dest='genefm',
+            help='Generate the external function map.')
+    Parser.add_argument(
+            '-P', '--gen-extdef-mapping-ast', action='store_true',
+            dest='genefmast', help='Generate the external function map.')
+    Parser.add_argument(
+            '-Y', '--gen-invocation-list', action='store_true', dest='genivcl',
+            help='Generate the invocation list.')
+    Parser.add_argument(
+            '-L', '--gen-input-file-list', action='store_true', dest='genifl',
+            help='Generate input file list.')
+
+    Parser.add_argument(
+            '--analyze', type=str, dest='analyze', choices=['ctu', 'no-ctu'],
+            help='Execute Clang Static Analyzer.')
+
+    Parser.add_argument(
+            '--cc', type=str, dest='cc', default=Default.CCompiler,
+            help='Customize the C compiler.')
+    Parser.add_argument(
+            '--cxx', type=str, dest='cxx', default=Default.CXXCompiler,
+            help='Customize the C++ compiler.')
+    Parser.add_argument(
+            '--efmer', type=str, dest='efmer', default=Default.ExtDefMapper,
+            help='Customize the external function map generator.')
+
+    Parser.add_argument(
+            '--efm', type=str, dest='efm', default=Default.ExternalFunctionMap,
+            help='Customize the filename of output external function map.')
+    Parser.add_argument(
+            '--ivcl', type=str, dest='ivcl', default=Default.InvocationList,
+            help='Customize the filename of output invocation list.')
+    Parser.add_argument(
+            '--ifl', type=str, dest='ifl', default=Default.InputFileList,
+            help='Customize the filename of output input file list.')
+
+
+    Parser.add_argument(
+            '--ctu-on-demand-parsing', action='store_true', dest='genodp',
+            help='Prepare CTU analysis for on-demand-parsing. (alias to -MYL)')
+    Parser.add_argument(
+            '--ctu-loading-ast-files', action='store_true', dest='genlaf',
+            help='Prepare CTU analysis for loading AST files. (alias to -APL)')
+
+    opts = Parser.parse_args(argv[1:])
+    opts.output = os.path.abspath(opts.output)
+    if opts.genodp:
+        opts.genefm = True
+        opts.genivcl = True
+        opts.genifl = True
+    if opts.genlaf:
+        opts.genast = True
+        opts.genefmast = True
+        opts.genifl = True
+
+    # Init log.verbose.
+    log('N: Running in verbose mode', opts)
+    log('Parsed command line options: ' + str(opts))
+
+    if opts.genefm and opts.genefmast:
+        fatal('Option -M and -P are conflict.')
+
+    if not (opts.cdb and os.path.exists(opts.cdb)):
+        fatal('Compilation database "' + opts.cdb +'" is unavailable.')
+
+    if opts.jobs <= 0:
+        fatal('Invalid count of jobs.')
+
+    # If ctu analysis is enabled, but required files are not generated, add
+    # them. Note: invocation list is always required no matter odp or laf mode
+    # is prepared.
+    if opts.analyze == 'ctu':
+        if not os.path.isfile(os.path.join(opts.output, opts.efm)):
+            opts.genefm = True
+        if not os.path.isfile(os.path.join(opts.output, opts.ivcl)):
+            opts.genivcl = True
+
+    return opts
+# }}}
+
+
+def CompilerAction(opts, ccdb, action):
+    compiler = {'c': opts.cc, 'c++': opts.cxx}
+    arguments = [compiler[ccdb.language]] + ccdb.arguments + action.args
+
+    if action.hasOutput:
+        output = opts.output + ccdb.file + \
+                action.getOutputExtensionName(ccdb.language)
+        print('%s: %s' % (action.title, output))
+        arguments += ['-o', output]
+
+        # Create directory for output file.
+        mkdir(os.path.dirname(output))
     else:
-        try:
-            cj = json.load(open(opts.compiling, 'r'))
-            # workaround for linking database unsupported projects
-            if os.path.isfile(opts.linking):
-                lj = json.load(open(opts.linking, 'r'))
-            else:
-                print(
-                    'Warning: Processing compilation database without linking '
-                    'information for linking database.',
-                    file=sys.stderr)
-        except OSError as err:
-            print(
-                'Error while openning file: open: {}'.format(err),
-                file=sys.stderr)
-            exit(err.errno)
-    cd, ld = ParseCompilationCommands(cj, lj)
-    PreprocessProject(opts, cd, ld)
+        print('%s for %s' % (action.title, ccdb.file))
+
+    # Execute action commands.
+    log('!: ' + json.dumps(arguments))
+    with proc.Popen(arguments, cwd=ccdb.directory) as p:
+        ret = p.wait()
+    return ret
 
 
-if '__main__' == __name__:
+SyntaxOnlyAction = CompilerActionControl(
+        'Checking syntax errors', ['-fsyntax-only', '-Wall'])
+CompilationAction = CompilerActionControl(
+        'Generating object file', ['-c', '-w'], '.o')
+PreprocessAction = CompilerActionControl(
+        'Generating preprocessed source file', ['-E'], ['.i', '.ii'])
+GenerateASTAction = CompilerActionControl(
+        'Generating AST dump file', ['-emit-ast', '-w'], '.ast')
+GenerateBitcodeAction = CompilerActionControl(
+        'Generating LLVM bitcode file', ['-c', '-emit-llvm', '-w'], '.bc')
+GenerateLLVMIRAction = CompilerActionControl(
+        'Generating LLVM IR file', ['-c', '-emit-llvm', '-S', '-w'], '.ll')
+GenerateAssemblyAction = CompilerActionControl(
+        'Generating assembly dump file', ['-S', '-w'], '.s')
+# For analyzer, reset output and ctu arguments in self.args with opts.output.
+# Checkers in package deadcode are disabled by default, as they usually
+# generate only useless reports.
+ClangStaticAnalyzerAction = CompilerActionControl(
+        'Running static analyzer',
+        ['--analyze', '-Xanalyzer', '-analyzer-output=html',
+            '-Xanalyzer', '-analyzer-disable-checker=deadcode'])
+
+
+def ClangToolAction(opts, ccdb, action):
+    print('%s for %s' % (action.title, ccdb.file))
+    arguments = [action.tool, ccdb.file] + action.args + ['--', '-w'] + \
+             ccdb.arguments
+    log('!: ' + json.dumps(arguments))
+    content = None
+    with proc.Popen(arguments, stdout=action.stdout, stderr=action.stderr,
+            cwd=ccdb.directory) as p:
+        if action.stdout:
+            content = p.stdout.read().decode('utf-8')
+        if action.stderr:
+            content = p.stderr.read().decode('utf-8')
+        ret = p.wait()
+    if content is not None:
+        output = opts.output + ccdb.file + action.extname
+        mkdir(os.path.dirname(output))
+        with open(output, 'w') as fout:
+            fout.write(content)
+    return ret
+
+
+# Initialize tool names after argument parsing in function 
+# PostArgumentParsingInitializations.
+ClangExtDefMappingAction = ClangToolActionControl(
+        'Generating raw external function map', Default.ExtDefMapper, [],
+        '.extdef', proc.PIPE)
+
+
+def getExtDefMap(efmfile): return open(efmfile).read()
+def GenerateFinalExternalFunctionMap(opts, cdb):
+    output = os.path.join(opts.output, opts.efm)
+    print('Generating global external function map: ' + output)
+    efm = {}
+    with mp.Pool(opts.jobs) as p:
+        for efmcontent in p.map(getExtDefMap,
+                [opts.output + i.file + ClangExtDefMappingAction.extname \
+                        for i in cdb]):
+            for efmline in efmcontent.split('\n'):
+                try: # The new "<usr-length>:<usr> <path>" format (D102669).
+                    lenlen = efmline.find(':')
+                    usrlen = int(efmline[:lenlen])
+                    usr = efmline[:lenlen + usrlen + 1]
+                    path = efmline[lenlen + usrlen + 2:]
+                    efm[usr] = path
+                except ValueError: # When <usr-length> is not available.
+                    efmitem = efmline.split(' ')
+                    if len(efmitem) == 2:
+                        efm[efmitem[0]] = efmitem[1]
+    with open(output, 'w') as fout:
+        for usr in efm:
+            path = efm[usr]
+            if opts.genefmast and opts.genast:
+                path = opts.output + path + '.ast'
+            fout.write('%s %s\n' % (usr, path))
+
+
+def GenerateInvocationListAction(opts, cdb):
+    output = os.path.join(opts.output, opts.ivcl)
+    print('Generating invocation list: ' + output)
+
+    resourceDir = '-resource-dir='
+    with proc.Popen(['clang', '-print-resource-dir'], stdout=proc.PIPE) as p:
+        resourceDir += p.stdout.read().decode('utf-8').strip()
+
+    mkdir(os.path.dirname(output))
+    with open(output, 'w') as fout:
+        for ccdb in cdb:
+            ivcl = [ccdb.compiler] + ccdb.arguments + \
+                    ['-c', '-working-directory=' + ccdb.directory, resourceDir]
+            content = json.dumps({ccdb.file : ivcl})
+            fout.write(content[1:-1] + '\n')
+
+
+def GenerateInputFileListAction(opts, cdb):
+    output = os.path.join(opts.output, opts.ifl)
+    print('Generating input file list: ' + output)
+    mkdir(os.path.dirname(output))
+    with open(output, 'w') as fout:
+        for ccdb in cdb:
+            fout.write(ccdb.file + '\n')
+
+
+def PostArgumentParsingInitializations(opts):
+    # Set analyzer output path and ctu arguments.
+    ClangStaticAnalyzerAction.args += [
+            '-o', os.path.join(opts.output, 'csa-reports')
+            ]
+    if opts.verbose:
+        ClangStaticAnalyzerAction.args += [
+                '-Xanalyzer', '-analyzer-display-progress'
+                ]
+    if opts.analyze == 'ctu':
+        ctuConfigs = [
+                'experimental-enable-naive-ctu-analysis=true',
+                'ctu-dir=' + opts.output,
+                'ctu-index-name=' + opts.efm,
+                'ctu-invocation-list=' + os.path.join(opts.output, opts.ivcl),
+                ]
+        if opts.verbose:
+            ctuConfigs.append('display-ctu-progress=true')
+        ClangStaticAnalyzerAction.args += [
+                '-Xanalyzer', '-analyzer-config', '-Xanalyzer',
+                ','.join(ctuConfigs),
+                ]
+    # Set clang-extdef-mapping tool.
+    ClangExtDefMappingAction.tool = opts.efmer
+
+
+def CreateCompilationDatabaseObjectAction(opts, pool):
+    def action(ccmd):
+        ccdb = CompileCommands(ccmd)
+        if opts.syntax:
+            pool.addTask(CompilerAction, opts, ccdb, SyntaxOnlyAction)
+        if opts.genobj:
+            pool.addTask(CompilerAction, opts, ccdb, CompilationAction)
+        if opts.genii:
+            pool.addTask(CompilerAction, opts, ccdb, PreprocessAction)
+        if opts.genast:
+            pool.addTask(CompilerAction, opts, ccdb, GenerateASTAction)
+        if opts.genbc:
+            pool.addTask(CompilerAction, opts, ccdb, GenerateBitcodeAction)
+        if opts.genll:
+            pool.addTask(CompilerAction, opts, ccdb, GenerateLLVMIRAction)
+        if opts.genasm:
+            pool.addTask(CompilerAction, opts, ccdb, GenerateAssemblyAction)
+        if opts.genefm or opts.genefmast:
+            pool.addTask(ClangToolAction, opts, ccdb, ClangExtDefMappingAction)
+        # As no-ctu analysis is single file operation, they can be executed
+        # together with other compiler and clang tooling actions.
+        if opts.analyze == 'no-ctu':
+            pool.addTask(CompilerAction, opts, ccdb, ClangStaticAnalyzerAction)
+        return ccdb
+    return action
+
+
+def AddCompilationDatabaseActions(opts, pool, cdb):
+    if opts.genivcl:
+        pool.addTask(GenerateInvocationListAction, opts, cdb)
+    if opts.genifl:
+        pool.addTask(GenerateInputFileListAction, opts, cdb)
+
+
+def main(argv):
+    opts = ParseArguments(argv)
+    PostArgumentParsingInitializations(opts)
+    pool = TaskPool(opts.jobs)
+    action = CreateCompilationDatabaseObjectAction(opts, pool)
+    with open(opts.cdb) as fcdb:
+        cdb = json.load(fcdb, object_hook=action)
+    AddCompilationDatabaseActions(opts, pool, cdb)
+    pool.join()
+    # Generate the all-in-one extdef mapping after all seperated ones are
+    # generated.
+    if opts.genefm or opts.genefmast:
+        GenerateFinalExternalFunctionMap(opts, cdb)
+    # For ctu analysis, execute analyzer after all required files are
+    # generated.
+    if opts.analyze == 'ctu':
+        pool = TaskPool(opts.jobs)
+        for ccdb in cdb:
+            pool.addTask(CompilerAction, opts, ccdb, ClangStaticAnalyzerAction)
+        pool.join()
+
+
+if __name__ == '__main__':
     main(sys.argv)
