@@ -288,6 +288,10 @@ def ParseArguments(argv): # {{{
             '--ctu-loading-ast-files', action='store_true', dest='genlaf',
             help='Prepare CTU analysis for loading AST files. (alias to -APL)')
 
+    Parser.add_argument(
+            'files', type=str, nargs='*',
+            help='Execute actions on specific files in compilation database.')
+
     opts = Parser.parse_args(argv[1:])
     opts.output = os.path.abspath(opts.output)
     if opts.genodp:
@@ -298,6 +302,9 @@ def ParseArguments(argv): # {{{
         opts.genast = True
         opts.genefmast = True
         opts.genifl = True
+    if opts.files:
+        opts.files = set([os.path.abspath(os.path.join(os.path.curdir, i))
+            for i in opts.files])
 
     # Init log.verbose.
     log('N: Running in verbose mode', opts)
@@ -481,6 +488,9 @@ def PostArgumentParsingInitializations(opts):
 def CreateCompilationDatabaseObjectAction(opts, pool):
     def action(ccmd):
         ccdb = CompileCommands(ccmd)
+        if opts.files and ccdb.file not in opts.files:
+            log('Skip file "%s"' % ccdb.file)
+            return ccdb
         if opts.syntax:
             pool.addTask(CompilerAction, opts, ccdb, SyntaxOnlyAction)
         if opts.genobj:
