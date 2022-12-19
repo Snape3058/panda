@@ -248,7 +248,7 @@ def ParseArguments(argv): # {{{
             help='Generate the external function map.')
     Parser.add_argument(
             '-P', '--gen-extdef-mapping-ast', action='store_true',
-            dest='genefmast', help='Generate the external function map.')
+            dest='genefmast', help='Generate the external function map for AST files.')
     Parser.add_argument(
             '-Y', '--gen-invocation-list', action='store_true', dest='genivcl',
             help='Generate the invocation list.')
@@ -428,7 +428,7 @@ def GenerateFinalExternalFunctionMap(opts, cdb):
     with open(output, 'w') as fout:
         for usr in efm:
             path = efm[usr]
-            if opts.genefmast and opts.genast:
+            if opts.genefmast or opts.genast:
                 path = opts.output + path + '.ast'
             fout.write('%s %s\n' % (usr, path))
 
