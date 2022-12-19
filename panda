@@ -149,12 +149,13 @@ class TaskPool:
 
 
 class CompilerActionControl:
-    def __init__(self, title, args, extname=None):
+    def __init__(self, title, args, extname=None, outopt=None):
         self.title = title
         self.args = args
         if extname:
             self.hasOutput = True
             self.extname = extname
+            self.outopt = outopt if outopt is not None else '-o'
             assert isinstance(self.extname, str) or \
                     isinstance(self.extname, list), \
                     'Index "extname" can only be string or list'
@@ -243,6 +244,9 @@ def ParseArguments(argv): # {{{
     Parser.add_argument(
             '-S', '--gen-asm', action='store_true', dest='genasm',
             help='Generate the target assembly code.')
+    Parser.add_argument(
+            '-D', '--gen-dep', action='store_true', dest='gendep',
+            help='Generate dependency description.')
     Parser.add_argument(
             '-M', '--gen-extdef-mapping', action='store_true', dest='genefm',
             help='Generate the external function map.')
@@ -340,7 +344,7 @@ def CompilerAction(opts, ccdb, action):
         output = opts.output + ccdb.file + \
                 action.getOutputExtensionName(ccdb.language)
         print('%s: %s' % (action.title, output))
-        arguments += ['-o', output]
+        arguments += [action.outopt, output]
 
         # Create directory for output file.
         mkdir(os.path.dirname(output))
@@ -368,6 +372,8 @@ GenerateLLVMIRAction = CompilerActionControl(
         'Generating LLVM IR file', ['-c', '-emit-llvm', '-S', '-w'], '.ll')
 GenerateAssemblyAction = CompilerActionControl(
         'Generating assembly dump file', ['-S', '-w'], '.s')
+GenerateDependencyAction = CompilerActionControl(
+        'Generating dependency file', ['-fsyntax-only', '-w', '-M'], '.d', '-MF')
 # For analyzer, reset output and ctu arguments in self.args with opts.output.
 # Checkers in package deadcode are disabled by default, as they usually
 # generate only useless reports.
@@ -505,6 +511,8 @@ def CreateCompilationDatabaseObjectAction(opts, pool):
             pool.addTask(CompilerAction, opts, ccdb, GenerateLLVMIRAction)
         if opts.genasm:
             pool.addTask(CompilerAction, opts, ccdb, GenerateAssemblyAction)
+        if opts.gendep:
+            pool.addTask(CompilerAction, opts, ccdb, GenerateDependencyAction)
         if opts.genefm or opts.genefmast:
             pool.addTask(ClangToolAction, opts, ccdb, ClangExtDefMappingAction)
         # As no-ctu analysis is single file operation, they can be executed
