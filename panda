@@ -31,6 +31,11 @@ def mkdir(dirname):
             pass
 
 
+def mkoutname(outdir, filepath, extname):
+    assert os.path.isabs(filepath), 'Given file path is not abspath.'
+    return outdir + filepath + extname
+
+
 class CompileCommands:
     def __init__(self, ccmd=None):
         self.compiler = None
@@ -199,6 +204,7 @@ class Default:
     ExternalFunctionMap = 'externalDefMap.txt'
     InvocationList = 'invocations.yaml'
     InputFileList = 'inputs.ifl'
+    SourceFileList = 'source-files.txt'
 
     SelfPath = os.path.realpath(__file__)
 
@@ -259,6 +265,9 @@ def ParseArguments(argv): # {{{
     Parser.add_argument(
             '-L', '--gen-input-file-list', action='store_true', dest='genifl',
             help='Generate input file list.')
+    Parser.add_argument(
+            '-F', '--gen-source-file-list', action='store_true', dest='gensfl',
+            help='Generate source file list.')
 
     Parser.add_argument(
             '--analyze', type=str, dest='analyze', choices=['ctu', 'no-ctu'],
@@ -283,6 +292,13 @@ def ParseArguments(argv): # {{{
     Parser.add_argument(
             '--ifl', type=str, dest='ifl', default=Default.InputFileList,
             help='Customize the filename of output input file list.')
+    Parser.add_argument(
+            '--sfl', type=str, dest='sfl', default=Default.SourceFileList,
+            help='Customize the filename of output source file list.')
+
+    Parser.add_argument(
+            '--sfl-prefix', type=str, dest='sflprefix',
+            help='Filter source file list with a prefix. Empty accepts all.')
 
 
     Parser.add_argument(
@@ -341,8 +357,8 @@ def CompilerAction(opts, ccdb, action):
     arguments = [compiler[ccdb.language]] + ccdb.arguments + action.args
 
     if action.hasOutput:
-        output = opts.output + ccdb.file + \
-                action.getOutputExtensionName(ccdb.language)
+        output = mkoutname(opts.output, ccdb.file,
+                           action.getOutputExtensionName(ccdb.language))
         print('%s: %s' % (action.title, output))
         arguments += [action.outopt, output]
 
@@ -456,6 +472,42 @@ def GenerateInvocationListAction(opts, cdb):
             fout.write(content[1:-1] + '\n')
 
 
+def GenerateSourceFileListActionCollect(argv):
+    (ccdb, depfile) = argv
+    ret = set()
+    if not os.path.isfile(depfile):
+        warn('Rerun with -D to generate dependency file ' + depfile)
+        return ret
+    for i in open(depfile).read().split():
+        if not i or i == '\\' or i[-1] == ':':
+            continue
+        name = os.path.abspath(os.path.join(ccdb.directory, i))
+        if os.path.isfile(name):
+            ret.add(name)
+    return ret
+
+def GenerateSourceFileListAction(opts, cdb):
+    output = os.path.join(opts.output, opts.sfl)
+    print('Generating source file list: ' + output)
+
+    files = None
+    jobs = [(i, mkoutname(
+                opts.output, i.file,
+                GenerateDependencyAction.getOutputExtensionName(i.language))) \
+                        for i in cdb
+    ]
+    with mp.Pool(opts.jobs) as pool:
+        files = list(set.union(
+            *pool.map(GenerateSourceFileListActionCollect, jobs)))
+    files.sort()
+
+    mkdir(os.path.dirname(output))
+    with open(output, 'w') as fout:
+        for i in files:
+            if not opts.sflprefix or i.startswith(opts.sflprefix):
+                fout.write(i + '\n')
+
+
 def GenerateInputFileListAction(opts, cdb):
     output = os.path.join(opts.output, opts.ifl)
     print('Generating input file list: ' + output)
@@ -543,6 +595,9 @@ def main(argv):
     # generated.
     if opts.genefm or opts.genefmast:
         GenerateFinalExternalFunctionMap(opts, cdb)
+    # Generate the source file list based on dependency files.
+    if opts.gensfl:
+        GenerateSourceFileListAction(opts, cdb)
     # For ctu analysis, execute analyzer after all required files are
     # generated.
     if opts.analyze == 'ctu':
