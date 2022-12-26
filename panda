@@ -96,7 +96,7 @@ class CompileCommands:
         i, n = 0, len(arguments)
         self.arguments = []
         prune1 = {'-c', '-fsyntax-only', '-save-temps'}
-        prune2 = {'-o', '-MF', '-MT', '-MQ'}
+        prune2 = {'-o', '-MF', '-MT', '-MQ', '-MJ'}
         while True:
             i += 1
             if i >= n:
