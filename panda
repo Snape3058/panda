@@ -311,6 +311,9 @@ def ParseArguments(argv): # {{{
     Parser.add_argument(
             'files', type=str, nargs='*',
             help='Execute actions on specific files in compilation database.')
+    Parser.add_argument(
+            '--file-list', type=str, dest='filelist',
+            help='Execute actions for files on the list.')
 
     opts = Parser.parse_args(argv[1:])
     opts.output = os.path.abspath(opts.output)
@@ -325,6 +328,13 @@ def ParseArguments(argv): # {{{
     if opts.files:
         opts.files = set([os.path.abspath(os.path.join(os.path.curdir, i))
             for i in opts.files])
+    if opts.filelist:
+        try:
+            files = set([os.path.abspath(os.path.join(os.path.curdir, i))
+                for i in open(opts.filelist).read().split('\n')])
+            opts.files = opts.files.union(files) if opts.files else files
+        except IOError as e:
+            fatal(str(e))
 
     # Init log.verbose.
     log('N: Running in verbose mode', opts)
