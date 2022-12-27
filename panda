@@ -31,11 +31,6 @@ def mkdir(dirname):
             pass
 
 
-def mkoutname(outdir, filepath, extname):
-    assert os.path.isabs(filepath), 'Given file path is not abspath.'
-    return outdir + filepath + extname
-
-
 class CompileCommands:
     def __init__(self, ccmd=None):
         self.compiler = None
@@ -178,6 +173,10 @@ class CompilerActionControl:
             return self.extname[1]
         assert False, 'UNREACHABLE: cannot determine extname.'
 
+    def getOutputName(self, outdir, ccdb):
+        assert os.path.isabs(ccdb.file), "'file' in cdb unit is not abspath"
+        return outdir + ccdb.file + self.getOutputExtensionName(ccdb.language)
+
 
 class ClangToolActionControl:
     def __init__(self, title, tool, args, extname=None, stdout=None,
@@ -193,6 +192,10 @@ class ClangToolActionControl:
         if self.extname:
             assert self.stdout or self.stderr, \
                     'Capture output from either stdout or stderr'
+
+    def getOutputName(self, outdir, ccdb):
+        assert os.path.isabs(ccdb.file), "'file' in cdb unit is not abspath"
+        return outdir + ccdb.file + self.extname
 
 
 class Default:
@@ -367,8 +370,7 @@ def CompilerAction(opts, ccdb, action):
     arguments = [compiler[ccdb.language]] + ccdb.arguments + action.args
 
     if action.hasOutput:
-        output = mkoutname(opts.output, ccdb.file,
-                           action.getOutputExtensionName(ccdb.language))
+        output = action.getOutputName(opts.output, ccdb)
         print('%s: %s' % (action.title, output))
         arguments += [action.outopt, output]
 
@@ -423,7 +425,7 @@ def ClangToolAction(opts, ccdb, action):
             content = p.stderr.read().decode('utf-8')
         ret = p.wait()
     if content is not None:
-        output = opts.output + ccdb.file + action.extname
+        output = action.getOutputName(opts.output, ccdb)
         mkdir(os.path.dirname(output))
         with open(output, 'w') as fout:
             fout.write(content)
@@ -444,7 +446,7 @@ def GenerateFinalExternalFunctionMap(opts, cdb):
     efm = {}
     with mp.Pool(opts.jobs) as p:
         for efmcontent in p.map(getExtDefMap,
-                [opts.output + i.file + ClangExtDefMappingAction.extname \
+                [ClangExtDefMappingAction.getOutputName(opts.output, i) \
                         for i in cdb]):
             for efmline in efmcontent.split('\n'):
                 try: # The new "<usr-length>:<usr> <path>" format (D102669).
@@ -501,11 +503,8 @@ def GenerateSourceFileListAction(opts, cdb):
     print('Generating source file list: ' + output)
 
     files = None
-    jobs = [(i, mkoutname(
-                opts.output, i.file,
-                GenerateDependencyAction.getOutputExtensionName(i.language))) \
-                        for i in cdb
-    ]
+    jobs = [(i, GenerateDependencyAction.getOutputName(opts.output, i)) \
+            for i in cdb]
     with mp.Pool(opts.jobs) as pool:
         files = list(set.union(
             *pool.map(GenerateSourceFileListActionCollect, jobs)))
