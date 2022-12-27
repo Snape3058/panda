@@ -417,15 +417,19 @@ def ClangToolAction(opts, ccdb, action):
              ccdb.arguments
     log('!: ' + json.dumps(arguments))
     content = None
+    outstream = None
     with proc.Popen(arguments, stdout=action.stdout, stderr=action.stderr,
             cwd=ccdb.directory) as p:
         if action.stdout:
+            outstream = 'stdout'
             content = p.stdout.read().decode('utf-8')
         if action.stderr:
+            outstream = 'stderr'
             content = p.stderr.read().decode('utf-8')
         ret = p.wait()
     if content is not None:
         output = action.getOutputName(opts.output, ccdb)
+        log('!: Write ' + outstream + ' output to file ' + output)
         mkdir(os.path.dirname(output))
         with open(output, 'w') as fout:
             fout.write(content)
