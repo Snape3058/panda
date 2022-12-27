@@ -595,20 +595,9 @@ def AddCompilationDatabaseActions(opts, pool, cdb):
         pool.addTask(GenerateInputFileListAction, opts, cdb)
 
 
-def main(argv):
-    opts = ParseArguments(argv)
-    PostArgumentParsingInitializations(opts)
-    pool = TaskPool(opts.jobs)
-    action = CreateCompilationDatabaseObjectAction(opts, pool)
-    with open(opts.cdb) as fcdb:
-        cdb = json.load(fcdb, object_hook=action)
-    AddCompilationDatabaseActions(opts, pool, cdb)
-    pool.join()
-    # Generate the all-in-one extdef mapping after all seperated ones are
-    # generated.
+def ExecuteFullCompilationDatabaseAction(opts, cdb):
     if opts.genefm or opts.genefmast:
         GenerateFinalExternalFunctionMap(opts, cdb)
-    # Generate the source file list based on dependency files.
     if opts.gensfl:
         GenerateSourceFileListAction(opts, cdb)
     # For ctu analysis, execute analyzer after all required files are
@@ -618,6 +607,18 @@ def main(argv):
         for ccdb in cdb:
             pool.addTask(CompilerAction, opts, ccdb, ClangStaticAnalyzerAction)
         pool.join()
+
+
+def main(argv):
+    opts = ParseArguments(argv)
+    PostArgumentParsingInitializations(opts)
+    pool = TaskPool(opts.jobs)
+    action = CreateCompilationDatabaseObjectAction(opts, pool)
+    with open(opts.cdb) as fcdb:
+        cdb = json.load(fcdb, object_hook=action)
+    AddCompilationDatabaseActions(opts, pool, cdb)
+    pool.join()
+    ExecuteFullCompilationDatabaseAction(opts, cdb)
 
 
 if __name__ == '__main__':
