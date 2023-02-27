@@ -104,6 +104,7 @@ class CompileCommands:
         self.arguments = []
         prune1 = {'-c', '-fsyntax-only', '-save-temps'}
         prune2 = {'-o', '-MF', '-MT', '-MQ', '-MJ'}
+        prunes2 = {'-M', '-W', '-g'}
         while True:
             i += 1
             if i >= n:
@@ -113,7 +114,9 @@ class CompileCommands:
             if arguments[i] in prune2:
                 i += 1
                 continue
-            if arguments[i][:3] == '-o=' or arguments[i][:2] == '-M':
+            if arguments[i][:3] == '-o=':
+                continue
+            if arguments[i][:2] in prunes2:
                 continue
             self.arguments.append(arguments[i])
             # Reset language if provided in command line arguments.
