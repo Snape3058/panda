@@ -7,6 +7,8 @@ import json
 import argparse
 import multiprocessing as mp
 import subprocess as proc
+import time
+import atexit
 
 
 # Utils {{{
@@ -20,6 +22,15 @@ log.verbose = None
 
 def fatal(msg): sys.exit('-- ' + msg)
 def warn(msg): print('-- ' + msg, file=sys.stderr)
+
+
+def PrintExcutionInfo():
+    if PrintExcutionInfo.print_time:
+        print('Total execution time: %.3lf sec' %
+                (time.time() - PrintExcutionInfo.start_time))
+atexit.register(PrintExcutionInfo)
+PrintExcutionInfo.start_time = time.time()
+PrintExcutionInfo.print_time = False
 
 
 def mkdir(dirname):
@@ -318,8 +329,16 @@ def ParseArguments(argv): # {{{
             '--file-list', type=str, dest='filelist',
             help='Execute actions for files on the list.')
 
+    Parser.add_argument(
+            '--print-execution-time', action='store_true', dest='print_time',
+            help='Print total execution time.')
+
     opts = Parser.parse_args(argv[1:])
     opts.output = os.path.abspath(opts.output)
+
+    if opts.print_time:
+        PrintExcutionInfo.print_time = True
+
     if opts.genodp:
         opts.genefm = True
         opts.genivcl = True
