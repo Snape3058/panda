@@ -71,7 +71,8 @@ class CompileCommands:
 
         # directoy and file
         self.directory = os.path.abspath(ccmd['directory'])
-        self.file = os.path.join(self.directory, ccmd['file'])
+        self.file = os.path.abspath(os.path.join(
+            self.directory, ccmd['file']))
 
         # File type: clang::driver::types::lookupTypeForExtension
         extname = os.path.splitext(self.file)[1][1:]
