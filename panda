@@ -499,7 +499,10 @@ ClangStaticAnalyzerAction = CompilerActionControl(
 
 def ClangToolAction(opts, ccdb, action):
     print('%s for %s' % (action.title, ccdb.file))
-    arguments = [action.tool, ccdb.file] + action.args + ['--', '-w'] + \
+    actionargs = []
+    for i in action.args:
+        actionargs.append(i.replace('/path/to/output', opts.output))
+    arguments = [action.tool, ccdb.file] + actionargs + ['--', '-w'] + \
              ccdb.arguments
     log('!: ' + json.dumps(arguments))
     content = None
