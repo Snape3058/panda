@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 #-*- encoding: utf-8 -*-
 
+#################################################
+#  See Copyright Notice in file `LICENSE.txt`.  #
+#################################################
+
 import os
 import sys
 import json
