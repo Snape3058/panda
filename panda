@@ -142,11 +142,24 @@ class CompileCommands:
                 ('arguments' in ccmd or 'command' in ccmd)
 
 
+class WorklistItem:
+    def __init__(self, func, *args):
+        self.func = func
+        self.args = args
+
+    def run(self):
+        self.func(*self.args)
+        return True
+
+class WorklistStop:
+    def run(self): return False
+
+
+# NOTE: THINK AGAIN BEFORE MODIFYING THE IMPLEMENTATION OF STOPPING.
 class TaskPool:
     def __init__(self, count=0):
         assert count > 0, 'Invalid pool size.'
         self.procs = []
-        self.stop = 0x42424242
         self.tasks = mp.Queue()
         for i in range(count):
             proc = mp.Process(target=self._run_task)
@@ -155,20 +168,19 @@ class TaskPool:
             self.procs.append(proc)
 
     def addTask(self, *args):
-        self.tasks.put(args)
+        self.tasks.put(WorklistItem(*args))
 
     def join(self):
         for i in self.procs:
-            self.tasks.put(self.stop)
+            self.tasks.put(WorklistStop())
         for i in self.procs:
             i.join()
 
     def _run_task(self):
         while True:
-            args = self.tasks.get()
-            if args == self.stop:
+            job = self.tasks.get()
+            if not job.run():
                 break
-            (lambda action, *args: action(*args))(*args)
 
 
 def GetIndex(container, index, root='<root>'):
