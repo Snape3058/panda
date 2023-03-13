@@ -13,6 +13,8 @@ import multiprocessing as mp
 import subprocess as proc
 import time
 import atexit
+from queue import Queue
+from queue import PriorityQueue
 
 
 # Utils {{{
@@ -142,7 +144,22 @@ class CompileCommands:
                 ('arguments' in ccmd or 'command' in ccmd)
 
 
+# Measure job size according to task arguments
+# Sub-classes should reset self._compute for onerous size computation.
+class JobSize:
+    def get(self, opts, cdb, action=None):
+        return 0 if action is None else self._compute(opts, cdb, action)
+
+class LinesOfCodeAsJobSize(JobSize):
+    def _compute(self, opts, cdb, action):
+        with open(cdb.file) as f:
+            for count, _ in enumerate(f):
+                pass
+        return count + 1
+
+
 class WorklistItem:
+    jobsize = None
     def __init__(self, func, *args):
         self.func = func
         self.args = args
@@ -151,8 +168,43 @@ class WorklistItem:
         self.func(*self.args)
         return True
 
+    def resize(self):
+        self.size = self.jobsize.get(*self.args)
+
 class WorklistStop:
     def run(self): return False
+    def resize(self): pass
+
+
+# Wrapping a worklist item or stop, determining their order according to the
+# sorting strategy.
+# Override itemlt to override the sorting strategy.
+# DO NOT override __lt__ as it determines the order of stop and items.
+class WorklistOrder:
+    def __init__(self, item): self.item = item
+    def run(self): return self.item.run()
+    def isStop(self): return type(self.item) == WorklistStop
+    def __lt__(self, other):
+        if self.isStop() and other.isStop(): return False
+        if self.isStop() and not other.isStop(): return False
+        if not self.isStop() and other.isStop(): return True
+        if not self.isStop() and not other.isStop():
+            return self.itemlt(other)
+
+class LongestJobFirstWorklistOrder(WorklistOrder):
+    def itemlt(self, other):
+        return self.item.size > other.item.size
+
+class ShortestJobFirstWorklistOrder(WorklistOrder):
+    def itemlt(self, other):
+        return self.item.size < other.item.size
+
+
+class SortedWorklist(PriorityQueue):
+    order = None
+    def _put(self, item):
+        item.resize()
+        super()._put(self.order(item))
 
 
 # NOTE: THINK AGAIN BEFORE MODIFYING THE IMPLEMENTATION OF STOPPING.
@@ -160,7 +212,7 @@ class TaskPool:
     def __init__(self, count=0):
         assert count > 0, 'Invalid pool size.'
         self.procs = []
-        self.tasks = mp.Queue()
+        self.tasks = mp.Manager().SelectedWorkList()
         for i in range(count):
             proc = mp.Process(target=self._run_task)
             proc.daemon = True
@@ -436,6 +488,15 @@ def ParseArguments(argv): # {{{
             '--print-execution-time', action='store_true', dest='print_time',
             help='Print total execution time.')
 
+    Parser.add_argument(
+            '--scheduler-strategy', dest='scheduler', default='fifo',
+            choices=['fifo', 'ljf', 'sjf'],
+            help='Strategy of scheduling jobs.')
+    Parser.add_argument(
+            '--measure-job-size-with', dest='filesize', default='loc',
+            choices=['loc'],
+            help='Way of computing job size.')
+
     opts = Parser.parse_args(argv[1:])
     opts.output = os.path.abspath(opts.output)
 
@@ -484,6 +545,18 @@ def ParseArguments(argv): # {{{
             opts.genefm = True
         if not os.path.isfile(os.path.join(opts.output, opts.ivcl)):
             opts.genivcl = True
+
+    if opts.scheduler == 'fifo':
+        mp.Manager().register('SelectedWorkList', Queue)
+    elif opts.scheduler == 'ljf':
+        SortedWorklist.order = LongestJobFirstWorklistOrder
+        mp.Manager().register('SelectedWorkList', SortedWorklist)
+    elif opts.scheduler == 'sjf':
+        SortedWorklist.order = ShortestJobFirstWorklistOrder
+        mp.Manager().register('SelectedWorkList', SortedWorklist)
+
+    if opts.filesize == 'loc':
+        WorklistItem.jobsize = LinesOfCodeAsJobSize()
 
     return opts
 # }}}
