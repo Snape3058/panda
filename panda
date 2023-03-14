@@ -195,6 +195,15 @@ class CompilerActionControl:
         else:
             self.hasOutput = False
 
+    def summarize(self):
+        ret = 'compiler: ' + str(self.args)
+        if self.hasOutput:
+            ret += ', ' + str(self.outopt)
+        return ret
+
+    def __hash__(self):
+        return hash(self.summarize())
+
     def CreateFromPluginAction(action):
         title = GetIndex(action, 'title', 'action')
         args = GetIndex(action, 'args', 'action')
@@ -232,6 +241,12 @@ class ClangToolActionControl:
         if self.extname:
             assert self.stdout or self.stderr, \
                     'Capture output from either stdout or stderr'
+
+    def summarize(self):
+        return 'tooling: ' + self.tool + ', ' + str(self.args)
+
+    def __hash__(self):
+        return hash(self.summarize())
 
     def CreateFromPluginAction(action):
         title = GetIndex(action, 'title', 'action')
@@ -662,6 +677,23 @@ def PostArgumentParsingInitializations(opts):
                 ]
     # Set clang-extdef-mapping tool.
     ClangExtDefMappingAction.tool = opts.efmer
+
+    # Dump summaries of all actions.
+    if not opts.verbose:
+        return
+    log(SyntaxOnlyAction.summarize())
+    log(CompilationAction.summarize())
+    log(PreprocessAction.summarize())
+    log(GenerateASTAction.summarize())
+    log(GenerateBitcodeAction.summarize())
+    log(GenerateLLVMIRAction.summarize())
+    log(GenerateAssemblyAction.summarize())
+    log(GenerateDependencyAction.summarize())
+    log(ClangStaticAnalyzerAction.summarize())
+    log(ClangExtDefMappingAction.summarize())
+    if opts.plugin:
+        for p in opts.plugin:
+            log(p[1].summarize())
 
 
 def CreateCompilationDatabaseObjectAction(opts, pool):
