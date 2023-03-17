@@ -13,8 +13,11 @@ import multiprocessing as mp
 import subprocess as proc
 import time
 import atexit
+import re
+import heapq
 from queue import Queue
 from queue import PriorityQueue
+from threading import Lock as MutexLock
 
 
 # Utils {{{
@@ -144,11 +147,81 @@ class CompileCommands:
                 ('arguments' in ccmd or 'command' in ccmd)
 
 
+# Collecting code feature vector from source code.
+class CodeFeature:
+    pp_directives = ['define', 'undef', 'ifdef', 'ifndef', 'if', 'endif',
+            'else', 'elif', 'include', 'pragma']
+    ppdkwre = re.compile(r'#\s*\b' + r'\b|#\s*\b'.join(pp_directives) + r'\b')
+
+    c_keywords = ['break', 'case', 'continue', 'default', 'do', 'else', 'for',
+            'goto', 'if', 'return', 'switch', 'while']
+    ckwre = re.compile(r'\b' + r'\b|\b'.join(c_keywords) + r'\b')
+
+    cpp_keywords = ['catch', 'delete', 'new', 'throw', 'try']
+    cppkwre = re.compile(r'\b' + r'\b|\b'.join(cpp_keywords) + r'\b')
+
+    def __init__(self, filename, language='auto'):
+        self.language = language
+        if self.language == 'auto':
+            self.language = InferLanguage(filename)
+
+        self.features = {'strings': 0, 'blocks': 0}
+        for i in self.pp_directives:
+            self.features['#' + i] = 0
+        for i in self.c_keywords + \
+                (self.cpp_keywords if self.language == 'c++' else []):
+            self.features[i] = 0
+        with open(filename) as f:
+            for count, line in enumerate(f):
+                self._parseLine(line)
+        self.lineno = count + 1
+        log('@feature(%s): %s' % (filename, self.features))
+
+        # features IS RESET AFTER COLLECTION.
+        self._toLeastSquaresFeatureVector()
+
+    def _parseLine(self, line):
+        self._matchre(line, self.ppdkwre)
+        self._matchre(line, self.ckwre)
+        if self.language == 'c++':
+            self._matchre(line, self.cppkwre)
+        self.features['strings'] += line.count('"')
+        self.features['blocks'] += line.count('{')
+
+    def _matchre(self, line, regex):
+        for m in regex.finditer(line):
+            # For pp_directives, #match is used; whereas for other keywards,
+            # this substitution will not change the keywords.
+            entry = re.sub(r'#\s*(\w+)', r'#\1', m.group(0))
+            assert entry in self.features, 'Invalid entry: ' + entry
+            self.features[entry] += 1
+
+    # Refer to: numpy.linalg.lstsq
+    def _toLeastSquaresFeatureVector(self):
+        assert type(self.features) is dict, \
+                '_toLeastSquaresFeatureVector is invoked more than once'
+        features = self.features
+        ppkwfv = [features['#' + i] for i in self.pp_directives]
+        ckwfv = [features[i] for i in self.c_keywords]
+        if self.language == 'c++':
+            cppkwfv = [features[i] for i in self.cpp_keywords]
+        else:
+            cppkwfv = [0] * len(self.cpp_keywords)
+        self.features = ppkwfv + ckwfv + cppkwfv + \
+                [features['strings'], features['blocks'], 1]
+
+
 # Measure job size according to task arguments
 # Sub-classes should reset self._compute for onerous size computation.
+# hint returns True if model is updated.
 class JobSize:
     def get(self, opts, cdb, action=None):
         return 0 if action is None else self._compute(opts, cdb, action)
+    def hint(self, size, opts, cdb, action=None):
+        if action is not None:
+            return self._hint(size, opts, cdb, action)
+        return False
+    def _hint(self, size, opts, cdb, action): return False
 
 class LinesOfCodeAsJobSize(JobSize):
     def _compute(self, opts, cdb, action):
@@ -156,6 +229,71 @@ class LinesOfCodeAsJobSize(JobSize):
             for count, _ in enumerate(f):
                 pass
         return count + 1
+
+class FeatureEstimatedJobSize(JobSize):
+    def __init__(self):
+        self.summaries = {}
+        self.hints = {}
+        self.model = {}
+        self.mutex = MutexLock()
+
+    def _getFeature(self, cdb):
+        if cdb.file in self.summaries:
+            with self.mutex:
+                return self.summaries[cdb.file]
+
+        feature = CodeFeature(cdb.file, cdb.language)
+        with self.mutex:
+            self.summaries[cdb.file] = feature
+        return feature
+
+    def _compute(self, opts, cdb, action):
+        log('Computing job size for: ' + cdb.file)
+        feature = self._getFeature(cdb)
+
+        entry = hash(action)
+        if entry not in self.model:
+            log('@jobsize(%s) - model N/A: %d' % (cdb.file, feature.lineno))
+            return feature.lineno
+
+        ret = 0.0
+        with self.mutex:
+            for x, m in zip(feature.features, self.model[entry]):
+                ret += x * m
+        log('@jobsize(%s) - from model: %.3lf' % (cdb.file, ret))
+        return ret
+
+    def _hint(self, size, opts, cdb, action):
+        try:
+            import numpy as np
+        except ModuleNotFoundError:
+            return False
+
+        with self.mutex:
+            entry = hash(action)
+            log('@hint[%x](%s): %.3lf' % (entry, cdb.file, size))
+            self.hints.setdefault(entry, {})[cdb.file] = size
+            if len(self.hints[entry]) % Default.RecomputeModelAfterHints != 0:
+                return False
+
+            # Compute a model with numpy.linalg.lstsq
+            hints = [self.hints[entry][i] for i in self.hints[entry]]
+            log('hints: ' + str(hints))
+            summaries = [self.summaries[i].features for i in self.hints[entry]]
+            log('summaries: ' + str(summaries))
+            try:
+                farray = np.vstack(summaries)
+                self.model[entry] = \
+                        np.linalg.lstsq(farray, hints, rcond=None)[0]
+            except BaseException as e:
+                warn(str(e))
+                warn('When hinting action [%s] (%x) for file %s: %.3lf' \
+                        % (action.summarize(), entry, cdb.file, size))
+                warn('hints: ' + str(hints))
+                warn('summaries: ' + str(summaries))
+                return False
+            log('@model[%x]: %s' % (entry, str(self.model[entry])))
+        return True
 
 
 class WorklistItem:
@@ -171,6 +309,9 @@ class WorklistItem:
     def resize(self):
         self.size = self.jobsize.get(*self.args)
 
+    def hint(self, duration):
+        return self.jobsize.hint(duration, *self.args)
+
 class WorklistStop:
     def run(self): return False
     def resize(self): pass
@@ -183,6 +324,8 @@ class WorklistStop:
 class WorklistOrder:
     def __init__(self, item): self.item = item
     def run(self): return self.item.run()
+    def hint(self, duration): return self.item.hint(duration)
+    def resize(self): self.item.resize()
     def isStop(self): return type(self.item) == WorklistStop
     def __lt__(self, other):
         if self.isStop() and other.isStop(): return False
@@ -200,11 +343,27 @@ class ShortestJobFirstWorklistOrder(WorklistOrder):
         return self.item.size < other.item.size
 
 
+# Add self.hint to Queue.
+class NormalQueue(Queue):
+    def sort(self, *args): pass
+
 class SortedWorklist(PriorityQueue):
     order = None
     def _put(self, item):
         item.resize()
         super()._put(self.order(item))
+
+    # Add hint through jobsize. Re-sort queue if model is updated.
+    def sort(self):
+        if self.mutex.acquire(blocking=False):
+            log('RE-HEAPIFY QUEUE')
+            for item in self.queue:
+                item.resize()
+            heapq.heapify(self.queue)
+            self.mutex.release()
+        else:
+            log('Omitted re-heapify queue')
+            return
 
 
 # NOTE: THINK AGAIN BEFORE MODIFYING THE IMPLEMENTATION OF STOPPING.
@@ -231,8 +390,12 @@ class TaskPool:
     def _run_task(self):
         while True:
             job = self.tasks.get()
+            begin = time.time()
             if not job.run():
                 break
+            end = time.time()
+            if job.hint(end - begin):
+                self.tasks.sort()
 
 
 def GetIndex(container, index, root='<root>'):
@@ -377,6 +540,8 @@ class Default:
 
     ProgramDescriptionMsg = 'A simple driver for pipelining tools based on ' \
                             'compilation database.'
+
+    RecomputeModelAfterHints = 20
 # }}}
 
 
@@ -494,7 +659,7 @@ def ParseArguments(argv): # {{{
             help='Strategy of scheduling jobs.')
     Parser.add_argument(
             '--measure-job-size-with', dest='filesize', default='loc',
-            choices=['loc'],
+            choices=['loc', 'feature'],
             help='Way of computing job size.')
 
     opts = Parser.parse_args(argv[1:])
@@ -547,7 +712,7 @@ def ParseArguments(argv): # {{{
             opts.genivcl = True
 
     if opts.scheduler == 'fifo':
-        mp.Manager().register('SelectedWorkList', Queue)
+        mp.Manager().register('SelectedWorkList', NormalQueue)
     elif opts.scheduler == 'ljf':
         SortedWorklist.order = LongestJobFirstWorklistOrder
         mp.Manager().register('SelectedWorkList', SortedWorklist)
@@ -556,7 +721,10 @@ def ParseArguments(argv): # {{{
         mp.Manager().register('SelectedWorkList', SortedWorklist)
 
     if opts.filesize == 'loc':
-        WorklistItem.jobsize = LinesOfCodeAsJobSize()
+        mp.Manager().register('SelectedJobSize', LinesOfCodeAsJobSize)
+    elif opts.filesize == 'feature':
+        mp.Manager().register('SelectedJobSize', FeatureEstimatedJobSize)
+    WorklistItem.jobsize = mp.Manager().SelectedJobSize()
 
     return opts
 # }}}
