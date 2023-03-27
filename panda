@@ -426,6 +426,7 @@ class WorklistManager:
         log('Sorter process %d starts.' % self.sorter.pid)
 
     def hint(self, item, duration):
+        duration *= 1000
         self.hints.put((item, duration))
 
     def join(self):
