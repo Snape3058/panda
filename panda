@@ -223,6 +223,9 @@ class JobSize:
 
     def _hint(self, size, opts, cdb, action): return False
 
+    def getModel(self): return None
+    def getSummary(self): return None
+
 class LinesOfCodeAsJobSize(JobSize):
     def _compute(self, opts, cdb, action):
         with open(cdb.file) as f:
@@ -235,6 +238,9 @@ class FeatureEstimatedJobSize(JobSize):
         self.summaries = {}
         self.hints = {}
         self.model = {}
+
+    def getModel(self): return self.model
+    def getSummary(self): return self.summaries
 
     def _getFeature(self, cdb):
         if cdb.file in self.summaries:
@@ -359,15 +365,24 @@ class ShortestJobFirstWorklistOrder(WorklistOrder):
 class NormalQueue(Queue):
     def sort(self): pass
     def hint(self, item, duration): pass
+    def getSortDurations(self): return None
+    def getModel(self): return None
+    def getSize(self, item): return None
 
 class SortedWorklist(PriorityQueue):
     jobsize = None
     order = None
 
+    def getSortDurations(self): return self.durations
+    def getModel(self): return self.jobsize.getModel()
+
+    def getSize(self, item): return self.jobsize.get(*item.getArgs())
+
     def _init(self, _):
         super()._init(_)
         self.id = 0
         self.sorted = False
+        self.durations = []
 
     def _put(self, item):
         item = self.order(item)
@@ -383,7 +398,7 @@ class SortedWorklist(PriorityQueue):
 
         # Do not compute job size if there is idle workers.
         if self._qsize() > 2: # Locked, self.qsize will lead to dead lock.
-            item.size = self.jobsize.get(*item.getArgs())
+            item.size = self.getSize(item)
 
         # Put item into heap.
         try:
@@ -404,22 +419,27 @@ class SortedWorklist(PriorityQueue):
             return
         else:
             log('Sorting worklist.')
+        begin = time.time()
         with self.mutex:
             for item in self.queue:
                 if not item.isStop():
                     item.size = self.jobsize.get(*item.getArgs())
             heapq.heapify(self.queue)
             self.not_empty.notify()
+        end = time.time()
+        self.durations.append((begin, end))
 
     def hint(self, item, duration):
         if item.isStop(): return False
         return self.jobsize.hint(duration, *item.getArgs())
 
 class WorklistManager:
-    def __init__(self, worklist):
+    def __init__(self, worklist, output):
+        self.output = output
         self.worklist = worklist
         self.stop = mp.Manager().Value(bool, False)
         self.hints = mp.Manager().Queue()
+        self.hintlist = mp.Manager().list()
         self.sorter = mp.Process(target=self._sort)
         self.sorter.daemon = True
         self.sorter.start()
@@ -428,11 +448,36 @@ class WorklistManager:
     def hint(self, item, duration):
         duration *= 1000
         self.hints.put((item, duration))
+        self.hintlist.append((item, duration))
 
     def join(self):
         self.stop.set(True)
         self.sorter.join()
         log('Sorter process %d joins.' % self.sorter.pid)
+
+    def dump(self):
+        if not self.output: return
+        with open(os.path.join(self.output, 'sorter.log'), 'w') as f:
+            for i in self.worklist.getSortDurations():
+                f.write('%lf %lf\n' % (i[0], i[1]))
+        with open(os.path.join(self.output, 'hints.log'), 'w') as f:
+            for item, duration in list(self.hintlist):
+                if not hasattr(item, "size"): continue
+                if type(item.size) is int: continue
+                opts, cdb, action = \
+                        (lambda o, c, a=None: (o, c, a))(*item.getArgs())
+                f.write('%s %lf %lf\n' % (cdb.file, item.size, duration))
+        model = self.worklist.getModel()
+        if not model: return
+        with open(os.path.join(self.output, 'model.log'), 'w') as f:
+            f.write(str(model))
+        with open(os.path.join(self.output, 'predictions.log'), 'w') as f:
+            for item, duration in list(self.hintlist):
+                opts, cdb, action = \
+                        (lambda o, c, a=None: (o, c, a))(*item.getArgs())
+                if not action: continue
+                f.write('%s %lf %lf\n' \
+                        % (cdb.file, self.worklist.getSize(item), duration))
 
     def _sort(self):
         while not self.stop.get():
@@ -446,11 +491,17 @@ class WorklistManager:
 
 # NOTE: THINK AGAIN BEFORE MODIFYING THE IMPLEMENTATION OF STOPPING.
 class TaskPool:
-    def __init__(self, count=0):
+    def __init__(self, count=0, output=None):
         assert count > 0, 'Invalid pool size.'
+        if output:
+            stamp = time.strftime('logs-%y%m%d%H%M%S', time.localtime())
+            self.output = os.path.join(output, stamp)
+            mkdir(self.output)
+        else:
+            self.output = None
         self.procs = []
         self.tasks = mp.Manager().SelectedWorkList()
-        self.taskManager = WorklistManager(self.tasks)
+        self.taskManager = WorklistManager(self.tasks, self.output)
         for i in range(count):
             proc = mp.Process(target=self._run_task)
             proc.daemon = True
@@ -470,13 +521,21 @@ class TaskPool:
         self.taskManager.join()
 
     def _run_task(self):
+        durations = [(0.0, time.time())]
         while True:
             job = self.tasks.get()
             begin = time.time()
             if not job.run():
                 break
             end = time.time()
+            durations.append((begin, end))
             self.taskManager.hint(job, end - begin)
+        durations.append((time.time(), 0.0))
+        if self.output:
+            name = 'taskprocess-%d.log' % os.getpid()
+            with open(os.path.join(self.output, name), 'w') as f:
+                for i in durations:
+                    f.write('%lf %lf\n' % (i[0], i[1]))
 
 
 def GetIndex(container, index, root='<root>'):
@@ -1064,7 +1123,7 @@ def main(argv):
     opts = ParseArguments(argv)
     PostArgumentParsingInitializations(opts)
     PrintExcutionInfo.start_time = time.time()
-    pool = TaskPool(opts.jobs)
+    pool = TaskPool(opts.jobs, opts.output)
     action = CreateCompilationDatabaseObjectAction(opts, pool)
     with open(opts.cdb) as fcdb:
         cdb = json.load(fcdb, object_hook=action)
@@ -1072,6 +1131,7 @@ def main(argv):
     pool.join()
     ExecuteFullCompilationDatabaseAction(opts, cdb)
     PrintExcutionInfo()
+    pool.taskManager.dump()
 
 
 if __name__ == '__main__':
