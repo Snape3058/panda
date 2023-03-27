@@ -687,7 +687,7 @@ def ParseArguments(argv): # {{{
             help='Generate source file list.')
 
     Parser.add_argument(
-            '--analyze', type=str, dest='analyze', choices=['ctu', 'no-ctu'],
+            '--analyze', action='store_true', dest='analyze',
             help='Execute Clang Static Analyzer.')
     Parser.add_argument(
             '--plugin', type=str, nargs='*', help='External tools to be executed.')
@@ -790,11 +790,7 @@ def ParseArguments(argv): # {{{
     # If ctu analysis is enabled, but required files are not generated, add
     # them. Note: invocation list is always required no matter odp or laf mode
     # is prepared.
-    if opts.analyze == 'ctu':
-        if not os.path.isfile(os.path.join(opts.output, opts.efm)):
-            opts.genefm = True
-        if not os.path.isfile(os.path.join(opts.output, opts.ivcl)):
-            opts.genivcl = True
+    # NOTE: ctu analysis disabled for the tool demo version.
 
     if opts.scheduler == 'fifo':
         mp.Manager().register('SelectedWorkList', NormalQueue)
@@ -1000,19 +996,7 @@ def PostArgumentParsingInitializations(opts):
         ClangStaticAnalyzerAction.args += [
                 '-Xanalyzer', '-analyzer-display-progress'
                 ]
-    if opts.analyze == 'ctu':
-        ctuConfigs = [
-                'experimental-enable-naive-ctu-analysis=true',
-                'ctu-dir=' + opts.output,
-                'ctu-index-name=' + opts.efm,
-                'ctu-invocation-list=' + os.path.join(opts.output, opts.ivcl),
-                ]
-        if opts.verbose:
-            ctuConfigs.append('display-ctu-progress=true')
-        ClangStaticAnalyzerAction.args += [
-                '-Xanalyzer', '-analyzer-config', '-Xanalyzer',
-                ','.join(ctuConfigs),
-                ]
+    # NOTE: ctu analysis disabled for the tool demo version.
     # Set clang-extdef-mapping tool.
     ClangExtDefMappingAction.tool = opts.efmer
 
@@ -1060,7 +1044,7 @@ def CreateCompilationDatabaseObjectAction(opts, pool):
             pool.addTask(ClangToolAction, opts, ccdb, ClangExtDefMappingAction)
         # As no-ctu analysis is single file operation, they can be executed
         # together with other compiler and clang tooling actions.
-        if opts.analyze == 'no-ctu':
+        if opts.analyze:
             pool.addTask(CompilerAction, opts, ccdb, ClangStaticAnalyzerAction)
         # Add plugin actions.
         if opts.plugin:
@@ -1084,11 +1068,7 @@ def ExecuteFullCompilationDatabaseAction(opts, cdb):
         GenerateSourceFileListAction(opts, cdb)
     # For ctu analysis, execute analyzer after all required files are
     # generated.
-    if opts.analyze == 'ctu':
-        pool = TaskPool(opts.jobs)
-        for ccdb in cdb:
-            pool.addTask(CompilerAction, opts, ccdb, ClangStaticAnalyzerAction)
-        pool.join()
+    # NOTE: ctu analysis disabled for the tool demo version.
 
 
 def main(argv):
