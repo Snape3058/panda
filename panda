@@ -423,7 +423,7 @@ class WorklistManager:
         self.sorter = mp.Process(target=self._sort)
         self.sorter.daemon = True
         self.sorter.start()
-        log('Sorter process %s starts.' % self.sorter.name)
+        log('Sorter process %d starts.' % self.sorter.pid)
 
     def hint(self, item, duration):
         self.hints.put((item, duration))
@@ -431,7 +431,7 @@ class WorklistManager:
     def join(self):
         self.stop.set(True)
         self.sorter.join()
-        log('Sorter process %s joins.' % self.sorter.name)
+        log('Sorter process %d joins.' % self.sorter.pid)
 
     def _sort(self):
         while not self.stop.get():
@@ -454,7 +454,7 @@ class TaskPool:
             proc = mp.Process(target=self._run_task)
             proc.daemon = True
             proc.start()
-            log('Process %s starts.' % proc.name)
+            log('Task process %d starts.' % proc.pid)
             self.procs.append(proc)
 
     def addTask(self, *args):
@@ -465,7 +465,7 @@ class TaskPool:
             self.tasks.put(WorklistStop())
         for i in self.procs:
             i.join()
-            log('Process %s joins.' % i.name)
+            log('Task process %d joins.' % i.pid)
         self.taskManager.join()
 
     def _run_task(self):
