@@ -5,6 +5,7 @@
 #  See Copyright Notice in file `LICENSE.txt`.  #
 #################################################
 
+import traceback
 import os
 import sys
 import json
@@ -17,7 +18,7 @@ import re
 import heapq
 from queue import Queue
 from queue import PriorityQueue
-from threading import Lock as MutexLock
+from queue import Empty as QueueEmptyException
 
 
 # Utils {{{
@@ -216,11 +217,15 @@ class CodeFeature:
 # hint returns True if model is updated.
 class JobSize:
     def get(self, opts, cdb, action=None):
-        return 0 if action is None else self._compute(opts, cdb, action)
+        if action is None:
+            return None
+        return self._compute(opts, cdb, action)
+
     def hint(self, size, opts, cdb, action=None):
         if action is not None:
             return self._hint(size, opts, cdb, action)
         return False
+
     def _hint(self, size, opts, cdb, action): return False
 
 class LinesOfCodeAsJobSize(JobSize):
@@ -235,16 +240,13 @@ class FeatureEstimatedJobSize(JobSize):
         self.summaries = {}
         self.hints = {}
         self.model = {}
-        self.mutex = MutexLock()
 
     def _getFeature(self, cdb):
         if cdb.file in self.summaries:
-            with self.mutex:
-                return self.summaries[cdb.file]
+            return self.summaries[cdb.file]
 
         feature = CodeFeature(cdb.file, cdb.language)
-        with self.mutex:
-            self.summaries[cdb.file] = feature
+        self.summaries[cdb.file] = feature
         return feature
 
     def _compute(self, opts, cdb, action):
@@ -257,9 +259,8 @@ class FeatureEstimatedJobSize(JobSize):
             return feature.lineno
 
         ret = 0.0
-        with self.mutex:
-            for x, m in zip(feature.features, self.model[entry]):
-                ret += x * m
+        for x, m in zip(feature.features, self.model[entry]):
+            ret += x * m
         log('@jobsize(%s) - from model: %.3lf' % (cdb.file, ret))
         return ret
 
@@ -269,35 +270,37 @@ class FeatureEstimatedJobSize(JobSize):
         except ModuleNotFoundError:
             return False
 
-        with self.mutex:
-            entry = hash(action)
-            log('@hint[%x](%s): %.3lf' % (entry, cdb.file, size))
-            self.hints.setdefault(entry, {})[cdb.file] = size
-            if len(self.hints[entry]) % Default.RecomputeModelAfterHints != 0:
-                return False
+        # Build feature for current cdb if not computed before.
+        self._getFeature(cdb)
 
-            # Compute a model with numpy.linalg.lstsq
-            hints = [self.hints[entry][i] for i in self.hints[entry]]
-            log('hints: ' + str(hints))
-            summaries = [self.summaries[i].features for i in self.hints[entry]]
-            log('summaries: ' + str(summaries))
-            try:
-                farray = np.vstack(summaries)
-                self.model[entry] = \
-                        np.linalg.lstsq(farray, hints, rcond=None)[0]
-            except BaseException as e:
-                warn(str(e))
-                warn('When hinting action [%s] (%x) for file %s: %.3lf' \
-                        % (action.summarize(), entry, cdb.file, size))
-                warn('hints: ' + str(hints))
-                warn('summaries: ' + str(summaries))
-                return False
-            log('@model[%x]: %s' % (entry, str(self.model[entry])))
+        # Add hint.
+        entry = hash(action)
+        log('@hint[%x](%s): %.3lf' % (entry, cdb.file, size))
+        self.hints.setdefault(entry, {})[cdb.file] = size
+        if len(self.hints[entry]) % Default.RecomputeModelAfterHints != 0:
+            return False
+
+        # Compute a model with numpy.linalg.lstsq
+        hints = [self.hints[entry][i] for i in self.hints[entry]]
+        log('hints: ' + str(hints))
+        summaries = [self.summaries[i].features for i in self.hints[entry]]
+        log('summaries: ' + str(summaries))
+        try:
+            farray = np.vstack(summaries)
+            model = np.linalg.lstsq(farray, hints, rcond=None)[0]
+            self.model[entry] = model
+        except BaseException as e:
+            warn(str(e))
+            warn('When hinting action [%s] (%x) for file %s: %.3lf' \
+                    % (action.summarize(), entry, cdb.file, size))
+            warn('hints: ' + str(hints))
+            warn('summaries: ' + str(summaries))
+            return False
+        log('@model[%x]: %s' % (entry, str(model)))
         return True
 
 
 class WorklistItem:
-    jobsize = None
     def __init__(self, func, *args):
         self.func = func
         self.args = args
@@ -305,12 +308,6 @@ class WorklistItem:
     def run(self):
         self.func(*self.args)
         return True
-
-    def resize(self):
-        self.size = self.jobsize.get(*self.args)
-
-    def hint(self, duration):
-        return self.jobsize.hint(duration, *self.args)
 
 class WorklistStop:
     def run(self): return False
@@ -321,49 +318,134 @@ class WorklistStop:
 # sorting strategy.
 # Override itemlt to override the sorting strategy.
 # DO NOT override __lt__ as it determines the order of stop and items.
+#
+# Worklist order:
+# - STOP is always the largest element
+# - if size is not determined, order by id: FIFO
+# - sized order is determined by sub-classes comparison
 class WorklistOrder:
     def __init__(self, item): self.item = item
+    def getArgs(self): return self.item.args
     def run(self): return self.item.run()
-    def hint(self, duration): return self.item.hint(duration)
-    def resize(self): self.item.resize()
-    def isStop(self): return type(self.item) == WorklistStop
-    def __lt__(self, other):
-        if self.isStop() and other.isStop(): return False
-        if self.isStop() and not other.isStop(): return False
-        if not self.isStop() and other.isStop(): return True
-        if not self.isStop() and not other.isStop():
-            return self.itemlt(other)
 
+    def isStop(self): return type(self.item) is WorklistStop
+    def hasSize(self): return hasattr(self, 'size')
+
+    def __lt__(self, other):
+        # STOPs are always the largest.
+        if self.isStop(): return False
+        if other.isStop(): return True
+        # if unsized, order by ID.
+        if not self.hasSize() or not other.hasSize():
+            return self.id < other.id
+        # if both are sized, order by size.
+        return self.itemlt(other)
+
+# Longest job first order:
+# - CDB tasks to front: the least
+# - Decending order of size: the larger the less
 class LongestJobFirstWorklistOrder(WorklistOrder):
     def itemlt(self, other):
-        return self.item.size > other.item.size
+        if self.size is None: return True
+        if other.size is None: return False
+        return self.size > other.size
 
+# Shortest job first order:
+# - CDB tasks to back: the largest
+# - Decending order of size: the less the less
 class ShortestJobFirstWorklistOrder(WorklistOrder):
     def itemlt(self, other):
-        return self.item.size < other.item.size
+        if self.size is None: return False
+        if other.size is None: return True
+        return self.size < other.size
 
 
-# Add self.hint to Queue.
+# Add interfaces of SortedWorklist to Queue.
 class NormalQueue(Queue):
-    def sort(self, *args): pass
+    def sort(self): pass
+    def hint(self, item, duration): pass
 
 class SortedWorklist(PriorityQueue):
+    jobsize = None
     order = None
-    def _put(self, item):
-        item.resize()
-        super()._put(self.order(item))
 
-    # Add hint through jobsize. Re-sort queue if model is updated.
-    def sort(self):
-        if self.mutex.acquire(blocking=False):
-            log('RE-HEAPIFY QUEUE')
-            for item in self.queue:
-                item.resize()
-            heapq.heapify(self.queue)
-            self.mutex.release()
-        else:
-            log('Omitted re-heapify queue')
+    def _init(self, _):
+        super()._init(_)
+        self.id = 0
+        self.sorted = False
+
+    def _put(self, item):
+        item = self.order(item)
+        if item.isStop():
+            # STOP is always the largest item, append directly will not break
+            # the heap constraints.
+            self.queue.append(item)
             return
+
+        # It is safe to directly use self.id, as lock is locked.
+        self.id += 1
+        item.id = self.id
+
+        # Do not compute job size if there is idle workers.
+        if self._qsize() > 2: # Locked, self.qsize will lead to dead lock.
+            item.size = self.jobsize.get(*item.getArgs())
+
+        # Put item into heap.
+        try:
+            super()._put(item)
+        except Exception as e:
+            traceback.print_exc()
+
+    def sort(self):
+        # Do not sort if there is too little items.
+        # Force sorting for the first time when upgrading loc to size.
+        qsize = self.qsize()
+        log('qsize = ' + str(qsize))
+        if not self.sorted:
+            self.sorted = True
+            log('Force first sorting.')
+        elif qsize <= 5:
+            log('Abort sorting.')
+            return
+        else:
+            log('Sorting worklist.')
+        with self.mutex:
+            for item in self.queue:
+                if not item.isStop():
+                    item.size = self.jobsize.get(*item.getArgs())
+            heapq.heapify(self.queue)
+            self.not_empty.notify()
+
+    def hint(self, item, duration):
+        if item.isStop(): return False
+        return self.jobsize.hint(duration, *item.getArgs())
+
+class WorklistManager:
+    def __init__(self, worklist):
+        self.worklist = worklist
+        self.stop = mp.Manager().Value(bool, False)
+        self.hints = mp.Manager().Queue()
+        self.sorter = mp.Process(target=self._sort)
+        self.sorter.daemon = True
+        self.sorter.start()
+        log('Sorter process %s starts.' % self.sorter.name)
+
+    def hint(self, item, duration):
+        self.hints.put((item, duration))
+
+    def join(self):
+        self.stop.set(True)
+        self.sorter.join()
+        log('Sorter process %s joins.' % self.sorter.name)
+
+    def _sort(self):
+        while not self.stop.get():
+            try:
+                if not self.worklist.hint(*self.hints.get_nowait()):
+                    continue
+            except QueueEmptyException:
+                continue
+            self.worklist.sort()
 
 
 # NOTE: THINK AGAIN BEFORE MODIFYING THE IMPLEMENTATION OF STOPPING.
@@ -372,10 +454,12 @@ class TaskPool:
         assert count > 0, 'Invalid pool size.'
         self.procs = []
         self.tasks = mp.Manager().SelectedWorkList()
+        self.taskManager = WorklistManager(self.tasks)
         for i in range(count):
             proc = mp.Process(target=self._run_task)
             proc.daemon = True
             proc.start()
+            log('Process %s starts.' % proc.name)
             self.procs.append(proc)
 
     def addTask(self, *args):
@@ -386,6 +470,8 @@ class TaskPool:
             self.tasks.put(WorklistStop())
         for i in self.procs:
             i.join()
+            log('Process %s joins.' % i.name)
+        self.taskManager.join()
 
     def _run_task(self):
         while True:
@@ -394,8 +480,7 @@ class TaskPool:
             if not job.run():
                 break
             end = time.time()
-            if job.hint(end - begin):
-                self.tasks.sort()
+            self.taskManager.hint(job, end - begin)
 
 
 def GetIndex(container, index, root='<root>'):
@@ -724,7 +809,7 @@ def ParseArguments(argv): # {{{
         mp.Manager().register('SelectedJobSize', LinesOfCodeAsJobSize)
     elif opts.filesize == 'feature':
         mp.Manager().register('SelectedJobSize', FeatureEstimatedJobSize)
-    WorklistItem.jobsize = mp.Manager().SelectedJobSize()
+    SortedWorklist.jobsize = mp.Manager().SelectedJobSize()
 
     return opts
 # }}}
