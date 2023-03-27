@@ -13,7 +13,6 @@ import argparse
 import multiprocessing as mp
 import subprocess as proc
 import time
-import atexit
 import re
 import heapq
 from queue import Queue
@@ -35,12 +34,8 @@ def warn(msg): print('-- ' + msg, file=sys.stderr)
 
 
 def PrintExcutionInfo():
-    if PrintExcutionInfo.print_time:
-        print('Total execution time: %.3lf sec' %
-                (time.time() - PrintExcutionInfo.start_time))
-atexit.register(PrintExcutionInfo)
-PrintExcutionInfo.start_time = time.time()
-PrintExcutionInfo.print_time = False
+    print('Total execution time: %.3lf sec' %
+            (time.time() - PrintExcutionInfo.start_time))
 
 
 def mkdir(dirname):
@@ -735,10 +730,6 @@ def ParseArguments(argv): # {{{
             help='Execute actions for files on the list.')
 
     Parser.add_argument(
-            '--print-execution-time', action='store_true', dest='print_time',
-            help='Print total execution time.')
-
-    Parser.add_argument(
             '--scheduler-strategy', dest='scheduler', default='fifo',
             choices=['fifo', 'ljf', 'sjf'],
             help='Strategy of scheduling jobs.')
@@ -749,9 +740,6 @@ def ParseArguments(argv): # {{{
 
     opts = Parser.parse_args(argv[1:])
     opts.output = os.path.abspath(opts.output)
-
-    if opts.print_time:
-        PrintExcutionInfo.print_time = True
 
     if opts.genodp:
         opts.genefm = True
@@ -1074,6 +1062,7 @@ def ExecuteFullCompilationDatabaseAction(opts, cdb):
 def main(argv):
     opts = ParseArguments(argv)
     PostArgumentParsingInitializations(opts)
+    PrintExcutionInfo.start_time = time.time()
     pool = TaskPool(opts.jobs)
     action = CreateCompilationDatabaseObjectAction(opts, pool)
     with open(opts.cdb) as fcdb:
@@ -1081,6 +1070,7 @@ def main(argv):
     AddCompilationDatabaseActions(opts, pool, cdb)
     pool.join()
     ExecuteFullCompilationDatabaseAction(opts, cdb)
+    PrintExcutionInfo()
 
 
 if __name__ == '__main__':
