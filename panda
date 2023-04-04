@@ -460,24 +460,21 @@ class WorklistManager:
         with open(os.path.join(self.output, 'sorter.log'), 'w') as f:
             for i in self.worklist.getSortDurations():
                 f.write('%lf %lf\n' % (i[0], i[1]))
-        with open(os.path.join(self.output, 'hints.log'), 'w') as f:
-            for item, duration in list(self.hintlist):
-                if not hasattr(item, "size"): continue
-                if type(item.size) is int: continue
-                opts, cdb, action = \
-                        (lambda o, c, a=None: (o, c, a))(*item.getArgs())
-                f.write('%s %lf %lf\n' % (cdb.file, item.size, duration))
         model = self.worklist.getModel()
-        if not model: return
-        with open(os.path.join(self.output, 'model.log'), 'w') as f:
-            f.write(str(model))
+        if model:
+            with open(os.path.join(self.output, 'model.log'), 'w') as f:
+                f.write(str(model))
         with open(os.path.join(self.output, 'predictions.log'), 'w') as f:
+            f.write('<file> <online> <final> <execution>\n')
             for item, duration in list(self.hintlist):
                 opts, cdb, action = \
                         (lambda o, c, a=None: (o, c, a))(*item.getArgs())
+                size = 0.0
+                if hasattr(item, 'size') and type(item.size) is not int:
+                    size = item.size
                 if not action: continue
-                f.write('%s %lf %lf\n' \
-                        % (cdb.file, self.worklist.getSize(item), duration))
+                f.write('%s %lf %lf %lf\n' % (
+                    cdb.file, size, self.worklist.getSize(item), duration))
 
     def _sort(self):
         while not self.stop.get():
