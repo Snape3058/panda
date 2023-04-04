@@ -488,18 +488,17 @@ class WorklistManager:
 
 # NOTE: THINK AGAIN BEFORE MODIFYING THE IMPLEMENTATION OF STOPPING.
 class TaskPool:
-    def __init__(self, count=0, output=None):
-        assert count > 0, 'Invalid pool size.'
-        if output:
-            stamp = time.strftime('logs-%y%m%d%H%M%S', time.localtime())
-            self.output = os.path.join(output, stamp)
-            mkdir(self.output)
-        else:
-            self.output = None
+    def __init__(self, opts):
+        assert opts.jobs > 0, 'Invalid pool size.'
+        logdirformat = '-'.join([
+            'logs', opts.scheduler, opts.filesize, '%y%m%d%H%M%S'])
+        stamp = time.strftime(logdirformat, time.localtime())
+        self.output = os.path.join(opts.output, stamp)
+        mkdir(self.output)
         self.procs = []
         self.tasks = mp.Manager().SelectedWorkList()
         self.taskManager = WorklistManager(self.tasks, self.output)
-        for i in range(count):
+        for i in range(opts.jobs):
             proc = mp.Process(target=self._run_task)
             proc.daemon = True
             proc.start()
@@ -1120,7 +1119,7 @@ def main(argv):
     opts = ParseArguments(argv)
     PostArgumentParsingInitializations(opts)
     PrintExcutionInfo.start_time = time.time()
-    pool = TaskPool(opts.jobs, opts.output)
+    pool = TaskPool(opts)
     action = CreateCompilationDatabaseObjectAction(opts, pool)
     with open(opts.cdb) as fcdb:
         cdb = json.load(fcdb, object_hook=action)
