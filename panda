@@ -856,10 +856,7 @@ def ParseArguments(argv): # {{{
 
 
 def CompilerAction(opts, ccdb, action):
-    if ccdb.language == 'Unknown':
-        warn('Skip file "%s" for unsupported language type' % ccdb.file)
-        return -1
-
+    assert ccdb.language != 'Unknown', 'unknown language?'
     compiler = {'c': opts.cc, 'c++': opts.cxx}
     arguments = [compiler[ccdb.language]] + ccdb.arguments + action.args
 
@@ -906,10 +903,7 @@ ClangStaticAnalyzerAction = CompilerActionControl(
 
 
 def ClangToolAction(opts, ccdb, action):
-    if ccdb.language == 'Unknown':
-        warn('Skip file "%s" for unsupported language type' % ccdb.file)
-        return -1
-
+    assert ccdb.language != 'Unknown', 'unknown language?'
     print('%s for %s' % (action.title, ccdb.file))
     actionargs = []
     for i in action.args:
@@ -1068,6 +1062,10 @@ def CreateCompilationDatabaseObjectAction(opts, pool):
         if opts.files and ccdb.file not in opts.files:
             log('Skip file "%s"' % ccdb.file)
             return ccdb
+        if ccdb.language == 'Unknown':
+            warn('Skip file "%s" for unsupported language type' % ccdb.file)
+            return ccdb
+
         if opts.syntax:
             pool.addTask(CompilerAction, opts, ccdb, SyntaxOnlyAction)
         if opts.genobj:
