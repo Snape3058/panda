@@ -365,7 +365,7 @@ class ShortestJobFirstWorklistOrder(WorklistOrder):
 class NormalQueue(Queue):
     def sort(self): pass
     def hint(self, item, duration): pass
-    def getSortDurations(self): return None
+    def getSortDurations(self): return []
     def getModel(self): return None
     def getSize(self, item): return None
 
