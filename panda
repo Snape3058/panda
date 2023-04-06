@@ -18,6 +18,7 @@ import heapq
 from queue import Queue
 from queue import PriorityQueue
 from queue import Empty as QueueEmptyException
+import numpy as np
 
 
 # Utils {{{
@@ -265,11 +266,6 @@ class FeatureEstimatedJobSize(JobSize):
         return ret
 
     def _hint(self, size, opts, cdb, action):
-        try:
-            import numpy as np
-        except ModuleNotFoundError:
-            return False
-
         # Build feature for current cdb if not computed before.
         self._getFeature(cdb)
 
@@ -290,6 +286,7 @@ class FeatureEstimatedJobSize(JobSize):
             model = np.linalg.lstsq(farray, hints, rcond=None)[0]
             self.model[entry] = model
         except BaseException as e:
+            traceback.print_exc()
             warn(str(e))
             warn('When hinting action [%s] (%x) for file %s: %.3lf' \
                     % (action.summarize(), entry, cdb.file, size))
@@ -309,9 +306,10 @@ class WorklistItem:
         self.func(*self.args)
         return True
 
+    def getArgs(self): return self.args
+
 class WorklistStop:
     def run(self): return False
-    def resize(self): pass
 
 
 # Wrapping a worklist item or stop, determining their order according to the
@@ -366,7 +364,7 @@ class NormalQueue(Queue):
     def hint(self, item, duration): pass
     def getSortDurations(self): return []
     def getModel(self): return None
-    def getSize(self, item): return None
+    def getSize(self, item): return 0
 
 class SortedWorklist(PriorityQueue):
     jobsize = None
