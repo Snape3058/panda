@@ -145,28 +145,33 @@ class CompileCommands:
 
 # Collecting code feature vector from source code.
 class CodeFeature:
-    pp_directives = ['define', 'undef', 'ifdef', 'ifndef', 'if', 'endif',
-            'else', 'elif', 'include', 'pragma']
-    ppdkwre = re.compile(r'#\s*\b' + r'\b|#\s*\b'.join(pp_directives) + r'\b')
+    ider = re.compile(r'\b[a-zA-Z_][a-zA-Z0-9_]*\b')
+    keywords = [
+        'const', 'auto', 'char', 'bool', 'false', 'true', 'if', 'for', 'while',
+        'template', 'nullptr'
+    ]
+    kwre = re.compile(r'\b' + r'\b|\b'.join(keywords) + r'\b')
+    count = [
+        ('string', '"'), ('block', '{'), ('include', '<'), ('stmt', ';'),
+        ('bcom', '/*'), ('lcom', '//'), ('para', '('),
+        ('arrow', '->'), ('addr', '&'), ('mul', '*'), ('equal', '='),
+        ('dot', '.'), ('add', '+'), ('not', '!')
+    ]
 
-    c_keywords = ['break', 'case', 'continue', 'default', 'do', 'else', 'for',
-            'goto', 'if', 'return', 'switch', 'while']
-    ckwre = re.compile(r'\b' + r'\b|\b'.join(c_keywords) + r'\b')
+    @staticmethod
+    def dumpFeatures(f):
+        print('# ' + ', '.join(CodeFeature.keywords), file=f)
+        print('# ' + ', '.join(["'" + i[1] + "'" for i in CodeFeature.count]),
+                file=f)
+        print('# identifier, lineno, size, 1', file=f)
 
-    cpp_keywords = ['catch', 'delete', 'new', 'throw', 'try']
-    cppkwre = re.compile(r'\b' + r'\b|\b'.join(cpp_keywords) + r'\b')
-
-    def __init__(self, filename, language='auto'):
-        self.language = language
-        if self.language == 'auto':
-            self.language = InferLanguage(filename)
-
-        self.features = {'strings': 0, 'blocks': 0}
-        for i in self.pp_directives:
-            self.features['#' + i] = 0
-        for i in self.c_keywords + \
-                (self.cpp_keywords if self.language == 'c++' else []):
-            self.features[i] = 0
+    def __init__(self, filename):
+      try:
+        self.features = {}
+        self.features['identifier'] = 0
+        for i in self.keywords: self.features[i] = 0
+        for i in self.count: self.features[i[0]] = 0
+        self.size = 0
         with open(filename) as f:
             for count, line in enumerate(f):
                 self._parseLine(line)
@@ -175,21 +180,19 @@ class CodeFeature:
 
         # features IS RESET AFTER COLLECTION.
         self._toLeastSquaresFeatureVector()
+      except Exception:
+        traceback.print_exc()
 
     def _parseLine(self, line):
-        self._matchre(line, self.ppdkwre)
-        self._matchre(line, self.ckwre)
-        if self.language == 'c++':
-            self._matchre(line, self.cppkwre)
-        self.features['strings'] += line.count('"')
-        self.features['blocks'] += line.count('{')
+        self.size += len(line)
+        self.features['identifier'] += len(self.ider.findall(line))
+        for m in self.kwre.finditer(line):
+            self.features[m.group(0)] += 1
+        for c in self.count:
+            self.features[c[0]] += line.count(c[1])
 
     def _matchre(self, line, regex):
         for m in regex.finditer(line):
-            # For pp_directives, #match is used; whereas for other keywards,
-            # this substitution will not change the keywords.
-            entry = re.sub(r'#\s*(\w+)', r'#\1', m.group(0))
-            assert entry in self.features, 'Invalid entry: ' + entry
             self.features[entry] += 1
 
     # Refer to: numpy.linalg.lstsq
@@ -197,14 +200,10 @@ class CodeFeature:
         assert type(self.features) is dict, \
                 '_toLeastSquaresFeatureVector is invoked more than once'
         features = self.features
-        ppkwfv = [features['#' + i] for i in self.pp_directives]
-        ckwfv = [features[i] for i in self.c_keywords]
-        if self.language == 'c++':
-            cppkwfv = [features[i] for i in self.cpp_keywords]
-        else:
-            cppkwfv = [0] * len(self.cpp_keywords)
-        self.features = ppkwfv + ckwfv + cppkwfv + \
-                [features['strings'], features['blocks'], 1]
+        keywords = [features[i] for i in self.keywords]
+        count = [features[i[0]] for i in self.count]
+        self.features = keywords + count + \
+                [features['identifier'], self.lineno, self.size, 1]
 
 
 # Measure job size according to task arguments
@@ -246,7 +245,7 @@ class FeatureEstimatedJobSize(JobSize):
         if cdb.file in self.summaries:
             return self.summaries[cdb.file]
 
-        feature = CodeFeature(cdb.file, cdb.language)
+        feature = CodeFeature(cdb.file)
         self.summaries[cdb.file] = feature
         return feature
 
@@ -463,6 +462,7 @@ class WorklistManager:
         model = self.worklist.getModel()
         if model:
             with open(os.path.join(self.output, 'model.log'), 'w') as f:
+                CodeFeature.dumpFeatures(f)
                 f.write(str(model))
         with open(os.path.join(self.output, 'predictions.log'), 'w') as f:
             f.write('<file> <online> <final> <execution>\n')
