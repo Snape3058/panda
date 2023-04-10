@@ -393,9 +393,10 @@ class SortedWorklist(PriorityQueue):
         self.id += 1
         item.id = self.id
 
-        # Do not compute job size if there is idle workers.
-        if self._qsize() > 2: # Locked, self.qsize will lead to dead lock.
-            item.size = self.getSize(item)
+        ## Do not compute job size if there is idle workers.
+        #if self._qsize() > 2: # Locked, self.qsize will lead to dead lock.
+        #    item.size = self.getSize(item)
+        item.size = self.getSize(item)
 
         # Put item into heap.
         try:
