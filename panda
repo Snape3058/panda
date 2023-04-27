@@ -13,12 +13,8 @@ import argparse
 import multiprocessing as mp
 import subprocess as proc
 import time
-import re
-import heapq
 from queue import Queue
 from queue import PriorityQueue
-from queue import Empty as QueueEmptyException
-import numpy as np
 
 
 # Utils {{{
@@ -144,165 +140,25 @@ class CompileCommands:
                 ('arguments' in ccmd or 'command' in ccmd)
 
 
-# Collecting code feature vector from source code.
-class CodeFeature:
-    ider = re.compile(r'\b[a-zA-Z_][a-zA-Z0-9_]*\b')
-    keywords = [
-        'const', 'auto', 'char', 'bool', 'false', 'true', 'if', 'for', 'while',
-        'template', 'nullptr'
-    ]
-    kwre = re.compile(r'\b' + r'\b|\b'.join(keywords) + r'\b')
-    count = [
-        ('string', '"'), ('block', '{'), ('include', '<'), ('stmt', ';'),
-        ('bcom', '/*'), ('lcom', '//'), ('para', '('),
-        ('arrow', '->'), ('addr', '&'), ('mul', '*'), ('equal', '='),
-        ('dot', '.'), ('add', '+'), ('not', '!')
-    ]
-
-    @staticmethod
-    def dumpFeatures(f):
-        print('# ' + ', '.join(CodeFeature.keywords), file=f)
-        print('# ' + ', '.join(["'" + i[1] + "'" for i in CodeFeature.count]),
-                file=f)
-        print('# identifier, lineno, size, 1', file=f)
-
-    def __init__(self, filename):
-      try:
-        self.features = {}
-        self.features['identifier'] = 0
-        for i in self.keywords: self.features[i] = 0
-        for i in self.count: self.features[i[0]] = 0
-        self.size = 0
-        with open(filename) as f:
-            for count, line in enumerate(f):
-                self._parseLine(line)
-        self.lineno = count + 1
-        log('@feature(%s): %s' % (filename, self.features))
-
-        # features IS RESET AFTER COLLECTION.
-        self._toLeastSquaresFeatureVector()
-      except Exception:
-        traceback.print_exc()
-
-    def _parseLine(self, line):
-        self.size += len(line)
-        self.features['identifier'] += len(self.ider.findall(line))
-        for m in self.kwre.finditer(line):
-            self.features[m.group(0)] += 1
-        for c in self.count:
-            self.features[c[0]] += line.count(c[1])
-
-    def _matchre(self, line, regex):
-        for m in regex.finditer(line):
-            self.features[entry] += 1
-
-    # Refer to: numpy.linalg.lstsq
-    def _toLeastSquaresFeatureVector(self):
-        assert type(self.features) is dict, \
-                '_toLeastSquaresFeatureVector is invoked more than once'
-        features = self.features
-        keywords = [features[i] for i in self.keywords]
-        count = [features[i[0]] for i in self.count]
-        self.features = keywords + count + \
-                [features['identifier'], self.lineno, self.size, 1]
-
-
 # Measure job size according to task arguments
 # Sub-classes should reset self._compute for onerous size computation.
-# hint returns True if model is updated.
 class JobSize:
     def get(self, opts, cdb, action=None):
         if action is None:
             return None
         return self._compute(opts, cdb, action)
 
-    def hint(self, size, opts, cdb, action=None):
-        if action is not None:
-            return self._hint(size, opts, cdb, action)
-        return False
-
-    def _hint(self, size, opts, cdb, action): return False
-
-    def getModel(self): return None
-    def getSummary(self): return None
-
 class LinesOfCodeAsJobSize(JobSize):
     def _compute(self, opts, cdb, action):
-        with open(cdb.file) as f:
-            for count, _ in enumerate(f):
-                pass
-        return count + 1
+        return open(cdb.file).read().count('\n')
 
 class SemicolonAsJobSize(JobSize):
     def _compute(self, opts, cdb, action):
-        ret = 0
-        with open(cdb.file) as f:
-            for count, line in enumerate(f):
-                ret += line.count(';')
-        return ret + count + 1
+        return open(cdb.file).read().count(';')
 
-class FeatureEstimatedJobSize(JobSize):
-    def __init__(self):
-        self.summaries = {}
-        self.hints = {}
-        self.model = {}
-
-    def getModel(self): return self.model
-    def getSummary(self): return self.summaries
-
-    def _getFeature(self, cdb):
-        if cdb.file in self.summaries:
-            return self.summaries[cdb.file]
-
-        feature = CodeFeature(cdb.file)
-        self.summaries[cdb.file] = feature
-        return feature
-
+class CommaAsJobSize(JobSize):
     def _compute(self, opts, cdb, action):
-        log('Computing job size for: ' + cdb.file)
-        feature = self._getFeature(cdb)
-
-        entry = hash(action)
-        if entry not in self.model:
-            log('@jobsize(%s) - model N/A: %d' % (cdb.file, feature.lineno))
-            return feature.lineno
-
-        ret = 0.0
-        for x, m in zip(feature.features, self.model[entry]):
-            ret += x * m
-        log('@jobsize(%s) - from model: %.3lf' % (cdb.file, ret))
-        return ret
-
-    def _hint(self, size, opts, cdb, action):
-        # Build feature for current cdb if not computed before.
-        self._getFeature(cdb)
-
-        # Add hint.
-        entry = hash(action)
-        log('@hint[%x](%s): %.3lf' % (entry, cdb.file, size))
-        self.hints.setdefault(entry, {})[cdb.file] = size
-        if len(self.hints[entry]) % Default.RecomputeModelAfterHints != 0:
-            return False
-
-        # Compute a model with numpy.linalg.lstsq
-        hints = [self.hints[entry][i] for i in self.hints[entry]]
-        log('hints: ' + str(hints))
-        summaries = [self.summaries[i].features for i in self.hints[entry]]
-        log('summaries: ' + str(summaries))
-        try:
-            farray = np.vstack(summaries)
-            model = np.linalg.lstsq(farray, hints, rcond=None)[0]
-            self.model[entry] = model
-        except BaseException as e:
-            traceback.print_exc()
-            warn(str(e))
-            warn('When hinting action [%s] (%x) for file %s: %.3lf' \
-                    % (action.summarize(), entry, cdb.file, size))
-            warn('hints: ' + str(hints))
-            warn('summaries: ' + str(summaries))
-            return False
-        log('@model[%x]: %s' % (entry, str(model)))
-        return True
+        return open(cdb.file).read().count(',')
 
 
 class WorklistItem:
@@ -314,6 +170,7 @@ class WorklistItem:
         self.func(*self.args)
         return True
 
+    # Used by FIFO strategy, as it will not wrap item with order.
     def getArgs(self): return self.args
 
 class WorklistStop:
@@ -327,23 +184,20 @@ class WorklistStop:
 #
 # Worklist order:
 # - STOP is always the largest element
-# - if size is not determined, order by id: FIFO
 # - sized order is determined by sub-classes comparison
 class WorklistOrder:
     def __init__(self, item): self.item = item
+
+    # Proxies of WorklistItem methods.
     def getArgs(self): return self.item.args
     def run(self): return self.item.run()
 
     def isStop(self): return type(self.item) is WorklistStop
-    def hasSize(self): return hasattr(self, 'size')
 
     def __lt__(self, other):
         # STOPs are always the largest.
         if self.isStop(): return False
         if other.isStop(): return True
-        # if unsized, order by ID.
-        if not self.hasSize() or not other.hasSize():
-            return self.id < other.id
         # if both are sized, order by size.
         return self.itemlt(other)
 
@@ -352,8 +206,6 @@ class WorklistOrder:
 # - Decending order of size: the larger the less
 class LongestJobFirstWorklistOrder(WorklistOrder):
     def itemlt(self, other):
-        if self.size is None: return True
-        if other.size is None: return False
         return self.size > other.size
 
 # Shortest job first order:
@@ -361,35 +213,18 @@ class LongestJobFirstWorklistOrder(WorklistOrder):
 # - Decending order of size: the less the less
 class ShortestJobFirstWorklistOrder(WorklistOrder):
     def itemlt(self, other):
-        if self.size is None: return False
-        if other.size is None: return True
         return self.size < other.size
 
 
 # Add interfaces of SortedWorklist to Queue.
-class NormalQueue(Queue):
-    def sort(self): pass
-    def hint(self, item, duration): pass
-    def getSortDurations(self): return []
-    def getModel(self): return None
-    def getSize(self, item): return 0
+class NormalQueue(Queue): pass
 
 class SortedWorklist(PriorityQueue):
     jobsize = None
     order = None
 
-    def getSortDurations(self): return self.durations
-    def getModel(self): return self.jobsize.getModel()
-
-    def getSize(self, item): return self.jobsize.get(*item.getArgs())
-
-    def _init(self, _):
-        super()._init(_)
-        self.id = 0
-        self.sorted = False
-        self.durations = []
-
     def _put(self, item):
+        # Wrap WorklistItem with WorklistOrder.
         item = self.order(item)
         if item.isStop():
             # STOP is always the largest item, append directly will not break
@@ -397,14 +232,8 @@ class SortedWorklist(PriorityQueue):
             self.queue.append(item)
             return
 
-        # It is safe to directly use self.id, as lock is locked.
-        self.id += 1
-        item.id = self.id
-
-        ## Do not compute job size if there is idle workers.
-        #if self._qsize() > 2: # Locked, self.qsize will lead to dead lock.
-        #    item.size = self.getSize(item)
-        item.size = self.getSize(item)
+        # Determine job size prediction.
+        item.size = self.jobsize.get(*item.getArgs())
 
         # Put item into heap.
         try:
@@ -412,85 +241,26 @@ class SortedWorklist(PriorityQueue):
         except Exception as e:
             traceback.print_exc()
 
-    def sort(self):
-        # Do not sort if there is too little items.
-        # Force sorting for the first time when upgrading loc to size.
-        qsize = self.qsize()
-        log('qsize = ' + str(qsize))
-        if not self.sorted:
-            self.sorted = True
-            log('Force first sorting.')
-        elif qsize <= 5:
-            log('Abort sorting.')
-            return
-        else:
-            log('Sorting worklist.')
-        begin = time.time()
-        with self.mutex:
-            for item in self.queue:
-                if not item.isStop():
-                    item.size = self.jobsize.get(*item.getArgs())
-            heapq.heapify(self.queue)
-            self.not_empty.notify()
-        end = time.time()
-        self.durations.append((begin, end))
-
-    def hint(self, item, duration):
-        if item.isStop(): return False
-        return self.jobsize.hint(duration, *item.getArgs())
-
-class WorklistManager:
-    def __init__(self, worklist, output):
+class LogManager:
+    def __init__(self, output):
         self.output = output
-        self.worklist = worklist
-        self.stop = mp.Manager().Value(bool, False)
-        self.hints = mp.Manager().Queue()
         self.hintlist = mp.Manager().list()
-        self.sorter = mp.Process(target=self._sort)
-        self.sorter.daemon = True
-        self.sorter.start()
-        log('Sorter process %d starts.' % self.sorter.pid)
 
     def hint(self, item, duration):
         duration *= 1000
-        self.hints.put((item, duration))
         self.hintlist.append((item, duration))
-
-    def join(self):
-        self.stop.set(True)
-        self.sorter.join()
-        log('Sorter process %d joins.' % self.sorter.pid)
 
     def dump(self):
         if not self.output: return
-        with open(os.path.join(self.output, 'sorter.log'), 'w') as f:
-            for i in self.worklist.getSortDurations():
-                f.write('%lf %lf\n' % (i[0], i[1]))
-        model = self.worklist.getModel()
-        if model:
-            with open(os.path.join(self.output, 'model.log'), 'w') as f:
-                CodeFeature.dumpFeatures(f)
-                f.write(str(model))
         with open(os.path.join(self.output, 'predictions.log'), 'w') as f:
-            f.write('<file> <online> <final> <execution>\n')
+            f.write('<file> <size> <execution>\n')
             for item, duration in list(self.hintlist):
                 opts, cdb, action = \
                         (lambda o, c, a=None: (o, c, a))(*item.getArgs())
-                size = 0.0
-                if hasattr(item, 'size') and type(item.size) is not int:
-                    size = item.size
+                # Ignore cdb jobs.
                 if not action: continue
-                f.write('%s %lf %lf %lf\n' % (
-                    cdb.file, size, self.worklist.getSize(item), duration))
-
-    def _sort(self):
-        while not self.stop.get():
-            try:
-                if not self.worklist.hint(*self.hints.get_nowait()):
-                    continue
-            except QueueEmptyException:
-                continue
-            self.worklist.sort()
+                size = item.size if hasattr(item, 'size') else 0
+                f.write('%s %lf %lf\n' % (cdb.file, size, duration))
 
 
 # NOTE: THINK AGAIN BEFORE MODIFYING THE IMPLEMENTATION OF STOPPING.
@@ -504,7 +274,7 @@ class TaskPool:
         mkdir(self.output)
         self.procs = []
         self.tasks = mp.Manager().SelectedWorkList()
-        self.taskManager = WorklistManager(self.tasks, self.output)
+        self.logManager = LogManager(self.output)
         for i in range(opts.jobs):
             proc = mp.Process(target=self._run_task)
             proc.daemon = True
@@ -521,7 +291,6 @@ class TaskPool:
         for i in self.procs:
             i.join()
             log('Task process %d joins.' % i.pid)
-        self.taskManager.join()
 
     def _run_task(self):
         durations = [(0.0, time.time())]
@@ -532,7 +301,7 @@ class TaskPool:
                 break
             end = time.time()
             durations.append((begin, end))
-            self.taskManager.hint(job, end - begin)
+            self.logManager.hint(job, end - begin)
         durations.append((time.time(), 0.0))
         if self.output:
             name = 'taskprocess-%d.log' % os.getpid()
@@ -683,8 +452,6 @@ class Default:
 
     ProgramDescriptionMsg = 'A simple driver for pipelining tools based on ' \
                             'compilation database.'
-
-    RecomputeModelAfterHints = 20
 # }}}
 
 
@@ -793,12 +560,12 @@ def ParseArguments(argv): # {{{
             help='Execute actions for files on the list.')
 
     Parser.add_argument(
-            '--scheduler-strategy', dest='scheduler', default='fifo',
+            '--scheduler-strategy', dest='scheduler', default='ljf',
             choices=['fifo', 'ljf', 'sjf'],
             help='Strategy of scheduling jobs.')
     Parser.add_argument(
-            '--measure-job-size-with', dest='filesize', default='loc',
-            choices=['loc', 'feature', 'semicolon'],
+            '--measure-job-size-with', dest='filesize', default='semicolon',
+            choices=['loc', 'semicolon', 'comma'],
             help='Way of computing job size.')
 
     opts = Parser.parse_args(argv[1:])
@@ -854,10 +621,10 @@ def ParseArguments(argv): # {{{
 
     if opts.filesize == 'loc':
         mp.Manager().register('SelectedJobSize', LinesOfCodeAsJobSize)
-    elif opts.filesize == 'feature':
-        mp.Manager().register('SelectedJobSize', FeatureEstimatedJobSize)
     elif opts.filesize == 'semicolon':
         mp.Manager().register('SelectedJobSize', SemicolonAsJobSize)
+    elif opts.filesize == 'comma':
+        mp.Manager().register('SelectedJobSize', CommaAsJobSize)
     SortedWorklist.jobsize = mp.Manager().SelectedJobSize()
 
     return opts
@@ -1134,7 +901,7 @@ def main(argv):
     pool.join()
     ExecuteFullCompilationDatabaseAction(opts, cdb)
     PrintExcutionInfo()
-    pool.taskManager.dump()
+    pool.logManager.dump()
 
 
 if __name__ == '__main__':
