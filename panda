@@ -274,6 +274,7 @@ class TaskPool:
         mkdir(self.output)
         self.procs = []
         self.tasks = mp.Manager().SelectedWorkList()
+        self.taskarrive = []
         self.logManager = LogManager(self.output)
         for i in range(opts.jobs):
             proc = mp.Process(target=self._run_task)
@@ -284,6 +285,7 @@ class TaskPool:
 
     def addTask(self, *args):
         self.tasks.put(WorklistItem(*args))
+        self.taskarrive.append(time.time())
 
     def join(self):
         for i in self.procs:
@@ -291,6 +293,10 @@ class TaskPool:
         for i in self.procs:
             i.join()
             log('Task process %d joins.' % i.pid)
+        if self.output:
+            with open(os.path.join(self.output, 'task-arrive.log'), 'w') as f:
+                for i in self.taskarrive:
+                    f.write('%lf\n' % i)
 
     def _run_task(self):
         durations = [(0.0, time.time())]
