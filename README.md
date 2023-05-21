@@ -125,7 +125,7 @@ and object `action` defines the action to be executed.
     "comment": "Example plugin for Panda driver.",
     "type": "CompilerAction",
     "action": {
-        "title": "Generating dependency file",
+        "prompt": "Generating dependency file",
         "args": ["-fsyntax-only", "-w", "-M"],
         "extname": ".d",
         "outopt": "-MF"
@@ -134,7 +134,7 @@ and object `action` defines the action to be executed.
 ```
 
 For a compiler action, object `action` has four fields.
-Field `title` defines the prompt string printed during executing the action.
+Field `prompt` defines the prompt string printed during executing the action.
 Field `args` is a list of command line arguments to be added during execution.
 Field `extname` determines the extension name of the output file.
 And field `outopt` represents the option of generating the output.
@@ -148,7 +148,7 @@ And field `outopt` represents the option of generating the output.
     "comment": "Example plugin for Panda driver",
     "type": "ClangToolAction",
     "action": {
-        "title": "Generating raw external function map",
+        "prompt": "Generating raw external function map",
         "tool": "clang-tidy",
         "args": ["--config-file=/path/to/output/config.txt"],
         "extname": ".clang-tidy",
@@ -158,7 +158,7 @@ And field `outopt` represents the option of generating the output.
 ```
 
 For a tooling action, object `action` has five fields.
-Field `title`, `args`, and `extname` have the same meaning as a compile action.
+Field `prompt`, `args`, and `extname` have the same meaning as a compile action.
 Field `tool` determines the tool to be executed.
 And field `stream` represents
 the output of which stream will be stored to the output file.

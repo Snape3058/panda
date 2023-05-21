@@ -327,8 +327,8 @@ def GetIndexOrNone(container, index):
 
 
 class CompilerActionControl:
-    def __init__(self, title, args, extname=None, outopt=None):
-        self.title = title
+    def __init__(self, prompt, args, extname=None, outopt=None):
+        self.prompt = prompt
         self.args = args
         if extname:
             self.hasOutput = True
@@ -350,11 +350,11 @@ class CompilerActionControl:
         return hash(self.summarize())
 
     def CreateFromPluginAction(action):
-        title = GetIndex(action, 'title', 'action')
+        prompt = GetIndex(action, 'prompt', 'action')
         args = GetIndex(action, 'args', 'action')
         extname = GetIndexOrNone(action, 'extname')
         outopt = GetIndexOrNone(action, 'outopt')
-        return CompilerActionControl(title, args, extname, outopt)
+        return CompilerActionControl(prompt, args, extname, outopt)
 
     def getOutputExtensionName(self, language):
         if not self.hasOutput:
@@ -373,9 +373,9 @@ class CompilerActionControl:
 
 
 class ClangToolActionControl:
-    def __init__(self, title, tool, args, extname=None, stdout=None,
+    def __init__(self, prompt, tool, args, extname=None, stdout=None,
             stderr=None):
-        self.title = title
+        self.prompt = prompt
         self.tool = tool
         self.args = args
         self.extname = extname
@@ -394,7 +394,7 @@ class ClangToolActionControl:
         return hash(self.summarize())
 
     def CreateFromPluginAction(action):
-        title = GetIndex(action, 'title', 'action')
+        prompt = GetIndex(action, 'prompt', 'action')
         tool = GetIndex(action, 'tool', 'action')
         args = GetIndex(action, 'args', 'action')
         extname = GetIndexOrNone(action, 'extname')
@@ -408,7 +408,7 @@ class ClangToolActionControl:
             if not stdout and not stderr:
                 raise SyntaxError('Invalid value for index "stream" in action')
         return ClangToolActionControl(
-                title, tool, args, extname, stdout, stderr)
+                prompt, tool, args, extname, stdout, stderr)
 
     def getOutputName(self, outdir, ccdb):
         assert os.path.isabs(ccdb.file), "'file' in cdb unit is not abspath"
@@ -644,13 +644,13 @@ def CompilerAction(opts, ccdb, action):
 
     if action.hasOutput:
         output = action.getOutputName(opts.output, ccdb)
-        print('%s: %s' % (action.title, output))
+        print('%s: %s' % (action.prompt, output))
         arguments += [action.outopt, output]
 
         # Create directory for output file.
         mkdir(os.path.dirname(output))
     else:
-        print('%s for %s' % (action.title, ccdb.file))
+        print('%s for %s' % (action.prompt, ccdb.file))
 
     # Execute action commands.
     log('!: ' + json.dumps(arguments))
@@ -686,7 +686,7 @@ ClangStaticAnalyzerAction = CompilerActionControl(
 
 def ClangToolAction(opts, ccdb, action):
     assert ccdb.language != 'Unknown', 'unknown language?'
-    print('%s for %s' % (action.title, ccdb.file))
+    print('%s for %s' % (action.prompt, ccdb.file))
     actionargs = []
     for i in action.args:
         actionargs.append(i.replace('/path/to/output', opts.output))
