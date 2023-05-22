@@ -34,13 +34,17 @@ def mergeSortInversion(array):
     return retn, retv, reta
 
 
-def handleData(data, starts, joins):
+def handleData(data, starts, joins, arrtime):
     begins = [worker[0][0] for worker in data]
     ends = [worker[-1][1] for worker in data]
 
     sep("Basic information")
     global_start_time = min(starts)
     print('Global worker start time stamp: %lf' % global_start_time)
+    global_first_task_arrive_time = arrtime[0]
+    print('First task added to worklist:   %lf' % global_first_task_arrive_time)
+    global_last_task_arrive_time = arrtime[-1]
+    print('Last task added to worklist:    %lf' % global_last_task_arrive_time)
     global_begin_time = min(begins)
     print('Global begin time stamp:        %lf' % global_begin_time)
     last_begin_time = max(begins)
@@ -149,11 +153,29 @@ def handleData(data, starts, joins):
     gnt.set_yticks([i * 2 + 0.5 for i in range(workers)])
     gnt.set_yticklabels(['Worker-%d' % (i + 1) for i in range(workers)])
     gnt.grid(False)
-    for i, worker in enumerate(data):
-        ranges = [(w[0] - global_start_time, w[1] - global_start_time) \
-                        for w in worker[1:-1]]
-        print(ranges)
-        gnt.broken_barh(ranges, (i * 2, 1), facecolors='tab:blue')
+    for loc, worker in enumerate(data):
+        duty = [(w[0] - global_start_time, w[1] - w[0]) \
+                        for w in worker]
+        # print('* Worker-duty-%d:' % (i + 1), duty)
+        idle = [(global_first_task_arrive_time - global_start_time, \
+                        worker[0][0] - global_first_task_arrive_time)] + \
+                [(worker[i][1] - global_start_time, \
+                        worker[i + 1][0] - worker[i][1]) \
+                        for i in range(len(worker) - 1)] + \
+                [(worker[-1][1] - global_start_time, \
+                        global_join_time - worker[-1][1])]
+        # print('* Worker-idle-%d:' % (i + 1), idle)
+        dutyplot = gnt.broken_barh(duty, (loc * 2, 1), facecolors='tab:green',
+                                   alpha=0.8)
+        idleplot = gnt.broken_barh(idle, (loc * 2, 1), facecolors='tab:red',
+                                   alpha=0.8)
+        pendingplot = gnt.broken_barh(
+                [(0, global_first_task_arrive_time - global_start_time)],
+                (loc * 2, 1), facecolors='tab:gray')
+        gnt.legend([dutyplot, idleplot, pendingplot],
+                   ['duty', 'idle', 'preprocess'],
+                   loc='upper center', bbox_to_anchor=(0.5, 1.12),
+                   fancybox=True, shadow=True, ncol=5)
     plt.show()
 
 
@@ -165,7 +187,7 @@ def handleInput(data):
 
 def handle(path):
     getfile = lambda name: open(name).read().strip().split('\n')
-    data, starts, joins = [], [], []
+    data, starts, joins, arrtime = [], [], [], [0]
     for root, dirs, files in os.walk(path):
         for filename in files:
             fullname = os.path.join(path, filename)
@@ -174,7 +196,10 @@ def handle(path):
                 starts.append(float(durstr[0].split()[1]))
                 joins.append(float(durstr[-1].split()[0]))
                 data.append(handleInput(durstr[1:-1]))
-    handleData(data, starts, joins)
+            elif filename == 'task-arrive.log':
+                arrtimestr = getfile(fullname)
+                arrtime = [float(i) for i in arrtimestr]
+    handleData(data, starts, joins, arrtime)
     sep()
 
 
