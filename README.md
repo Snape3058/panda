@@ -201,10 +201,12 @@ An example Gantt Chart can be found from Figure 6 in the paper.
 ### Selection of Key to Sort the Worklist
 
 We select the key to sort the worklist with Pearson Correlation Coefficient.
-The detailed data of calculating the data is presented in the Google Spreadsheet below
-(it may take a while to load the data).
+The detailed data of calculating the data is presented in the Google Spreadsheet below.
 
 <iframe src="https://docs.google.com/spreadsheets/d/e/2PACX-1vSf--XAfkfdPwY3p5K6QCjv-_yKoKUaV4tQcu9AiBvuOebHcZ8vuVsrGLuWseS4xQWZy3krDmX3PTlz/pubhtml?widget=true&amp;headers=false" width="800" height="600"></iframe>
+
+It may take a while to load the data.
+Please go to the [homepage][link-homepage] of *Panda* if the preview is not available.
 
 ## Acknowledgments
 
@@ -220,3 +222,4 @@ Let me know if *Panda* helps you. Thanks.
 [link-al]: https://clang.llvm.org/docs/analyzer/user-docs/CrossTranslationUnit.html#manual-ctu-analysis
 [link-odp]: https://clang.llvm.org/docs/analyzer/user-docs/CrossTranslationUnit.html#id2
 [link-matplotlib]: https://matplotlib.org
+[link-homepage]: https://lcs.ios.ac.cn/~maxt/Panda/#selection-of-key-to-sort-the-worklist
