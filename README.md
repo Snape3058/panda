@@ -26,6 +26,11 @@ $ curl -fsSL https://github.com/Snape3058/panda/raw/demo/panda | sudo tee /usr/b
 $ sudo chmod +x /usr/bin/panda
 ```
 
+GitHub Repo for ISSTA tool demo revision: <https://github.com/Snape3058/panda/tree/demo>.
+Please note that the content on the `demo` branch is ahead of the main branch.
+And the functionalities on this branch will be merged to the main branch
+after this tool paper gets accepted.
+
 ## Usage
 
 Scheduling the execution of compiler-based tools requires the JSON Compilation Database.
@@ -118,7 +123,7 @@ field `comment` is a string for commenting the description,
 field `type` determines the type of the action (compiler or tooling action),
 and object `action` defines the action to be executed.
 
-* Example compiler action of generating dependency files (option `-D` or `--gen-dep`).
+* Example compiler action (Figure 4a) of generating dependency files (option `-D` or `--gen-dep`).
 
 ```json
 {
@@ -139,7 +144,7 @@ Field `args` is a list of command line arguments to be added during execution.
 Field `extname` determines the extension name of the output file.
 And field `outopt` represents the option of generating the output.
 
-* Example tooling action of executing Clang Tidy
+* Example tooling action (Figure 4b) of executing Clang Tidy
     with a configuration file `config.txt` in output directory
     and storing command line output of stderr stream to output file.
 
@@ -165,6 +170,42 @@ the output of which stream will be stored to the output file.
 Please note that, string `/path/to/output` will be always be replaced to
 the actual output path determined with option `-o` during execution.
 
+### Print Execution Summary and Gantt Chart
+
+For ISSTA Tool Demo paper revision,
+execution logs are dumped to the output path in the format of
+
+```
+/path/to/output/logs-<strategy>-<key>-<timestamp>
+```
+
+where `<strategy>` refers to the sorting strategies mentioned in Section 2.4
+that `fifo` for *First-Come-First-Service*, and `ljf` for *Longest-Processing-Time-First*.
+And `<key>` represent the key of sorting the worklist.
+As mentioned in Section 2.3, the number of semicolons (`semicolon`) is used by default,
+whereas the number of code lines (`loc`) is also available for alternative.
+
+To summarize a previous execution and present the Gantt Chart of all workers,
+please use the `analyze-log` script provided only in this branch.
+
+```
+$ analyze-log /path/to/output/logs-<strategy>-<key>-<timestamp>
+```
+
+The `analyze-log` requires [Matplotlib][link-matplotlib] to generate the Gantt Chart.
+If the Python interpreter fails to import this module,
+the `analyze-log` script will **NOT** report an error and exit.
+
+An example Gantt Chart can be found from Figure 6 in the paper.
+
+### Selection of Key to Sort the Worklist
+
+We select the key to sort the worklist with Pearson Correlation Coefficient.
+The detailed data of calculating the data is presented in the Google Spreadsheet below
+(it may take a while to load the data).
+
+<iframe src="https://docs.google.com/spreadsheets/d/e/2PACX-1vSf--XAfkfdPwY3p5K6QCjv-_yKoKUaV4tQcu9AiBvuOebHcZ8vuVsrGLuWseS4xQWZy3krDmX3PTlz/pubhtml?widget=true&amp;headers=false" width="800" height="600"></iframe>
+
 ## Acknowledgments
 
 * REST team, Institute of Software, Chinese Academy of Sciences
@@ -178,3 +219,4 @@ Let me know if *Panda* helps you. Thanks.
 [link-cdb]: https://clang.llvm.org/docs/JSONCompilationDatabase.html
 [link-al]: https://clang.llvm.org/docs/analyzer/user-docs/CrossTranslationUnit.html#manual-ctu-analysis
 [link-odp]: https://clang.llvm.org/docs/analyzer/user-docs/CrossTranslationUnit.html#id2
+[link-matplotlib]: https://matplotlib.org
