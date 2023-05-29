@@ -1,24 +1,20 @@
-![](images/panda.png)
+![](images/banner.png)
 
-# Panda - On Top of [Bear][link-bear]
+## From Compilation Database to Compiler-Based Tools.
 
-*Panda* is a compilation-independent tooling driver
-for pipelining compilers and tools in parallel
+*Panda* is a compilation-independent tooling scheduler
+for pipelining compiler-based tools in parallel
 based on the [JSON compilation database][link-cdb].
-It allows you to execute various actions
-on specific files
-by replaying the compilation process,
-such as generating the LLVM Bitcode with *Clang*
-and running the *Clang Static Analyzer* to check the given project.
+It allows you to execute various tools
+on translation units by replaying the compilation process.
+An introduction video to this tool is available from <https://youtu.be/dLG2tEzuaCw>.
 
-Since all dependencies are generated during compilation,
-the tooling process does not need to follow compilation dependency relations.
-Scheduling actions independently from compilation,
-*Panda* can take full advantage of the system resources
-to accelerate the tool execution
-and pipeline dependent actions
-that are not schedulable with one execution pass
-during compilation.
+The advantage of *Panda* include:
+
+1. Avoiding interference with the build system;
+2. Compatible to arbitrary compiler-based tools;
+3. Scheduling tool execution in a dependency-free manner
+    to take full advantages of the system resources.
 
 ## Installation
 
@@ -26,17 +22,22 @@ during compilation.
 You can install it by directly downloading file `panda` from this repo.
 
 ```
-$ curl -fsSL https://github.com/Snape3058/panda/raw/main/panda | sudo tee /usr/bin/panda >/dev/null
+$ curl -fsSL https://github.com/Snape3058/panda/raw/demo/panda | sudo tee /usr/bin/panda >/dev/null
 $ sudo chmod +x /usr/bin/panda
 ```
 
 ## Usage
 
-Executing panda by providing the actions to be executed
-and number of jobs in parallel.
+Scheduling the execution of compiler-based tools requires the JSON Compilation Database.
+Users can setup the environment according to the introduction from Clang
+(<https://clang.llvm.org/docs/HowToSetupToolingForLLVM.html>)
+or using tools like [Bear (Build EAR)][link-bear].
+
+Executing *Panda* by providing the actions to be executed
+together with number of parallel workers and output path (optional).
 
 ```
-$ panda <actions> [-j JOBS] [-f CDB] [-o OUTPUT] [options]
+$ panda <actions> [-f CDB] [-j JOBS] [-o OUTPUT] [options]
 ```
 
 The built-in actions are composed of compilation database actions,
@@ -100,14 +101,13 @@ The compiler actions mainly generate inputs in desired formats for different ana
     compiler action `-S`
 * Generate dependency description dump (`-D` or `--gen-dep`):
     compiler action `-M`
-* Execute Clang Static Analyzer without Cross Translation Unit Analysis (`--analysis no-ctu`)
+* Execute Clang Static Analyzer without Cross Translation Unit Analysis (`--analysis`)
 
 ### Built-in Tooling Actions
 
 The tooling actions mainly invoke Clang AST based tools.
 
 * Generating external function map (as mentioned above)
-* Execute Clang Static Analyzer with Cross Translation Unit Analysis activated (`--analysis ctu`)
 
 ### Action Plugins
 
@@ -168,6 +168,8 @@ the actual output path determined with option `-o` during execution.
 ## Acknowledgments
 
 * REST team, Institute of Software, Chinese Academy of Sciences
+* The tool name, *Panda*, is inspired by the animated sitcom *We Bare Bears*
+    and the compiler argument recorder [Bear (Build EAR)][link-bear].
 
 Let me know if *Panda* helps you. Thanks.
 
