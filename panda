@@ -327,9 +327,13 @@ def GetIndexOrNone(container, index):
 
 
 class CompilerActionControl:
-    def __init__(self, prompt, args, extname=None, outopt=None):
+    def __init__(self, prompt, args, extname=None, outopt=None, compiler=None):
         self.prompt = prompt
         self.args = args
+        self.compiler = compiler
+        if self.compiler:
+            assert 'c' in self.compiler and 'c++' in self.compiler, \
+                    'Index "compiler" needs to be language separated map'
         if extname:
             self.hasOutput = True
             self.extname = extname
@@ -344,6 +348,8 @@ class CompilerActionControl:
         ret = 'compiler: ' + str(self.args)
         if self.hasOutput:
             ret += ', ' + str(self.outopt)
+        if self.compiler:
+            ret += ', ' + str(self.compiler)
         return ret
 
     def __hash__(self):
@@ -354,7 +360,10 @@ class CompilerActionControl:
         args = GetIndex(action, 'args', 'action')
         extname = GetIndexOrNone(action, 'extname')
         outopt = GetIndexOrNone(action, 'outopt')
-        return CompilerActionControl(prompt, args, extname, outopt)
+        compiler = GetIndexOrNone(action, 'compiler')
+        if isinstance(compiler, str):
+            compiler = {'c': compiler, 'c++': compiler}
+        return CompilerActionControl(prompt, args, extname, outopt, compiler)
 
     def getOutputExtensionName(self, language):
         if not self.hasOutput:
@@ -370,6 +379,11 @@ class CompilerActionControl:
     def getOutputName(self, outdir, ccdb):
         assert os.path.isabs(ccdb.file), "'file' in cdb unit is not abspath"
         return outdir + ccdb.file + self.getOutputExtensionName(ccdb.language)
+
+    def getCompiler(self, ccdb):
+        if self.compiler:
+            return self.compiler[ccdb.language]
+        return ccdb.language
 
 
 class ClangToolActionControl:
@@ -639,8 +653,10 @@ def ParseArguments(argv): # {{{
 
 def CompilerAction(opts, ccdb, action):
     assert ccdb.language != 'Unknown', 'unknown language?'
-    compiler = {'c': opts.cc, 'c++': opts.cxx}
-    arguments = [compiler[ccdb.language]] + ccdb.arguments + action.args
+    compiler = action.getCompiler(ccdb)
+    if compiler == ccdb.language:
+        compiler = {'c': opts.cc, 'c++': opts.cxx}[ccdb.language]
+    arguments = [compiler] + ccdb.arguments + action.args
 
     if action.hasOutput:
         output = action.getOutputName(opts.output, ccdb)
