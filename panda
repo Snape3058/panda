@@ -656,7 +656,9 @@ def CompilerAction(opts, ccdb, action):
     compiler = action.getCompiler(ccdb)
     if compiler == ccdb.language:
         compiler = {'c': opts.cc, 'c++': opts.cxx}[ccdb.language]
-    arguments = [compiler] + ccdb.arguments + action.args
+    arguments = [compiler] + ccdb.arguments
+    for i in action.args:
+        arguments.append(i.replace('/path/to/output', opts.output))
 
     if action.hasOutput:
         output = action.getOutputName(opts.output, ccdb)
