@@ -358,9 +358,9 @@ class CompilerActionControl:
     def CreateFromPluginAction(action):
         prompt = GetIndex(action, 'prompt', 'action')
         args = GetIndex(action, 'args', 'action')
-        extname = GetIndexOrNone(action, 'extname')
+        extname = GetIndexOrNone(action, 'extension')
         outopt = GetIndexOrNone(action, 'outopt')
-        compiler = GetIndexOrNone(action, 'compiler')
+        compiler = GetIndexOrNone(action, 'tool')
         if isinstance(compiler, str):
             compiler = {'c': compiler, 'c++': compiler}
         return CompilerActionControl(prompt, args, extname, outopt, compiler)
@@ -411,10 +411,10 @@ class ClangToolActionControl:
         prompt = GetIndex(action, 'prompt', 'action')
         tool = GetIndex(action, 'tool', 'action')
         args = GetIndex(action, 'args', 'action')
-        extname = GetIndexOrNone(action, 'extname')
+        extname = GetIndexOrNone(action, 'extension')
         stdout, stderr = None, None
         if extname:
-            stream = GetIndex(action, 'stream', 'action')
+            stream = GetIndex(action, 'source', 'action')
             if stream == 'stdout':
                 stdout = proc.PIPE
             if stream == 'stderr':
@@ -437,11 +437,11 @@ def ParsePlugins(plugins):
             plugobj = json.load(open(p))
             actionTy = GetIndex(plugobj, 'type')
             action = GetIndex(plugobj, 'action')
-            if actionTy == 'CompilerAction':
+            if actionTy == 'Compiler':
                 ret.append((CompilerAction,
                     CompilerActionControl.CreateFromPluginAction(action)))
                 continue
-            if actionTy == 'ClangToolAction':
+            if actionTy == 'Frontend':
                 ret.append((ClangToolAction,
                     ClangToolActionControl.CreateFromPluginAction(action)))
                 continue

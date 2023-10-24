@@ -2,7 +2,7 @@
 
 ## From Compilation Database to Compiler-Based Tools.
 
-*Panda* is a compilation-independent tooling scheduler
+*Panda* is a compilation-independent scheduler
 for pipelining compiler-based tools in parallel
 based on the [JSON compilation database][link-cdb].
 It allows you to execute various tools
@@ -11,8 +11,8 @@ An introduction video to this tool is available from <https://youtu.be/dLG2tEzua
 
 The advantage of *Panda* include:
 
-1. Avoiding interference with the build system;
-2. Compatible to arbitrary compiler-based tools;
+1. Compatible to customize executions of various Compiler-Based Tools
+2. Avoiding interference with the build system;
 3. Scheduling tool execution in a dependency-free manner
     to take full advantages of the system resources.
 
@@ -26,7 +26,7 @@ $ curl -fsSL https://github.com/Snape3058/panda/raw/demo/panda | sudo tee /usr/b
 $ sudo chmod +x /usr/bin/panda
 ```
 
-GitHub Repo for ISSTA tool demo revision: <https://github.com/Snape3058/panda/tree/demo>.
+GitHub Repo for ICSE 2024 tool demo revision: <https://github.com/Snape3058/panda/tree/demo>.
 Please note that the content on the `demo` branch is ahead of the main branch.
 And the functionalities on this branch will be merged to the main branch
 after this tool paper gets accepted.
@@ -38,18 +38,24 @@ Users can setup the environment according to the introduction from Clang
 (<https://clang.llvm.org/docs/HowToSetupToolingForLLVM.html>)
 or using tools like [Bear (Build EAR)][link-bear].
 
-Executing *Panda* by providing the actions to be executed
-together with number of parallel workers and output path (optional).
+Execution of *Panda* requires
+the *CBT Execution Configurations* (Section 2.2) to be scheduled,
+as well as optional settings,
+such as number of parallel workers and output path.
 
 ```
-$ panda <actions> [-f CDB] [-j JOBS] [-o OUTPUT] [options]
+$ panda <configurations> [-f CDB] [-j JOBS] [-o OUTPUT] [options]
 ```
 
-The built-in actions are composed of compilation database actions,
-which can generate output directly from the compilation database,
-and tooling actions invoking compilers and tools.
-These actions can cover most scenes of executing analyzers
-and generating desired inputs for analyzers.
+*Panda* provides built-in configurations that cover most scenes
+of executing analyzers and generating desired inputs for analyzers.
+The built-in configurations can be categorized as
+Compiler Tool (T<sub>Compiler</sub>) Configurations,
+Frontend Tool (T<sub>Frontend</sub>) Configurations,
+and Compilation Database Configurations.
+The first two categories have been mentioned in the paper,
+and the last category of configurations are used to
+generate output directly from the compilation database.
 
 * Example 1: Generating external function map and invocation list
     to path `/tmp/csa-ctu-scan` under a concurrency of 16 processes.
@@ -58,19 +64,19 @@ and generating desired inputs for analyzers.
 $ panda -YM -j 16 -o /tmp/csa-ctu-scan
 ```
 
-* Example 2: Executing a customized plugin description `/tmp/check/action.json`
-    and store output to path `/tmp/check` without parallelization.
+* Example 2: Executing a customized plugin description `/tmp/check/plugin.json`
+    and store output to path `/tmp/check` sequentially.
 
 ```
-$ panda --plugin /tmp/check/action.json -o /tmp/check
+$ panda --plugin /tmp/check/plugin.json -o /tmp/check
 ```
 
-### Built-in Compilation Database Actions
+### Built-in Compilation Database Configurations
 
-The compilation database actions
+The compilation database configurations
 transform the input compilation database
 to generate the output file,
-or summarize the output of other tooling actions.
+or summarize the output of other T<sub>Frontend</sub> configurations.
 
 * Generate *input file list* (`-L` or `--gen-input-file-list`):
     a list of all unique `file`s with absolute path.
@@ -86,93 +92,105 @@ or summarize the output of other tooling actions.
     for Cross Translation Unit Analysis of the *Clang Static Analyzer*
     under [AST-loading][link-al] strategy.
 
-### Built-in Compiler Actions
+### Built-in Compiler Tool Configurations
 
-The compiler actions mainly generate inputs in desired formats for different analyzers.
+The T<sub>Compiler</sub> Configurations
+mainly generate inputs in desired formats for different analyzers.
 
 * Test command line arguments and source file syntax (`-X` or `--syntax`):
-    compiler action `-fsyntax-only -Wall`
+    invoke compiler with `-fsyntax-only -Wall`
 * Re-compile the source file (`-C` or `--compile`):
-    compiler action `-c`
+    invoke compiler with `-c`
 * Generate preprocessed source file dump (`-E` or `--preprocess`):
-    compiler action `-E`
+    invoke compiler with `-E`
 * Generate Clang PCH format AST dump (`-A` or `--gen-ast`):
-    clang compiler action `-emit-ast`
+    invoke the clang compiler with `-emit-ast`
 * Generate LLVM Bitcode in binary format (`-B` or `--gen-bc`):
-    clang compiler action `-emit-llvm`
+    invoke the clang compiler with `-emit-llvm`
 * Generate LLVM Bitcode in text cormat (`-R` or `--gen-ll`):
-    clang compiler action `-emit-llvm -S`
+    invoke the clang compiler with `-emit-llvm -S`
 * Generate assembly dump (`-S` or `--gen-asm`):
-    compiler action `-S`
+    invoke compiler with `-S`
 * Generate dependency description dump (`-D` or `--gen-dep`):
-    compiler action `-M`
+    invoke compiler with `-M`
 * Execute Clang Static Analyzer without Cross Translation Unit Analysis (`--analysis`)
 
-### Built-in Tooling Actions
+### Built-in Frontend Tool Configurations
 
-The tooling actions mainly invoke Clang AST based tools.
+The T<sub>Frontend</sub> configurations mainly invoke Clang Tooling based tools.
 
 * Generating external function map (as mentioned above)
 
-### Action Plugins
+### Plugins
 
-Users can execute customized compiler and tooling actions
-with plugins defined with an action description in JSON format.
+Users can execute customized T<sub>Compiler</sub> and T<sub>Frontend</sub> tools
+with plugins defined with a CBT execution configuration in JSON format.
 In the description,
 field `comment` is a string for commenting the description,
-field `type` determines the type of the action (compiler or tooling action),
-and object `action` defines the action to be executed.
+field `type` determines the type of the configuration,
+and object `action` defines the CBT Execution Configuration object.
 
-* Example compiler action (Figure 4a) of generating dependency files (option `-D` or `--gen-dep`).
+* Example T<sub>Compiler</sub> configuration (Figure 4a)
+  of generating dependency files (option `-D` or `--gen-dep`).
 
 ```json
 {
     "comment": "Example plugin for Panda driver.",
-    "type": "CompilerAction",
+    "type": "Compiler",
     "action": {
         "prompt": "Generating dependency file",
+        "tool": {
+            "c": "clang",
+            "c++": "clang++"
+        },
         "args": ["-fsyntax-only", "-w", "-M"],
-        "extname": ".d",
+        "extension": ".d",
         "outopt": "-MF"
     }
 }
 ```
 
-For a compiler action, object `action` has four fields.
-Field `prompt` defines the prompt string printed during executing the action.
+For a T<sub>Compiler</sub> configuration, object `action` has four fields.
+Field `prompt` defines the prompt string printed during executing the tool.
 Field `args` is a list of command line arguments to be added during execution.
-Field `extname` determines the extension name of the output file.
+Field `extension` determines the extension name of the output file.
 And field `outopt` represents the option of generating the output.
 
-* Example tooling action (Figure 4b) of executing Clang Tidy
+* Example T<sub>Frontend</sub> configuration (Figure 4b) of executing Clang Tidy
     with a configuration file `config.txt` in output directory
     and storing command line output of stderr stream to output file.
 
 ```json
 {
     "comment": "Example plugin for Panda driver",
-    "type": "ClangToolAction",
+    "type": "Frontend",
     "action": {
         "prompt": "Generating raw external function map",
         "tool": "clang-tidy",
         "args": ["--config-file=/path/to/output/config.txt"],
-        "extname": ".clang-tidy",
-        "stream": "stderr"
+        "extension": ".clang-tidy",
+        "source": "stderr"
     }
 }
 ```
 
-For a tooling action, object `action` has five fields.
-Field `prompt`, `args`, and `extname` have the same meaning as a compile action.
+For a T<sub>Frontend</sub> configuration, object `action` has five fields.
+Field `prompt`, `args`, and `extension` have the same meaning as
+a T<sub>Compiler</sub> configuration.
 Field `tool` determines the tool to be executed.
-And field `stream` represents
+And field `source` represents
 the output of which stream will be stored to the output file.
 Please note that, string `/path/to/output` will be always be replaced to
 the actual output path determined with option `-o` during execution.
 
-### Print Execution Summary and Gantt Chart
+## Data Presentation and Open-Access
 
-For ISSTA Tool Demo paper revision,
+The Gantt Chart in Figure 6 can be generated with the `analyze-log` script.
+And all data in the experiments are available from the Google Spreadsheet below.
+
+### Print Execution Summary and Draw Gantt Chart
+
+For Tool Demo paper revision,
 execution logs are dumped to the output path in the format of
 
 ```
@@ -206,7 +224,16 @@ The detailed data of calculating the data is presented in the Google Spreadsheet
 <iframe src="https://docs.google.com/spreadsheets/d/e/2PACX-1vSf--XAfkfdPwY3p5K6QCjv-_yKoKUaV4tQcu9AiBvuOebHcZ8vuVsrGLuWseS4xQWZy3krDmX3PTlz/pubhtml?widget=true&amp;headers=false" width="800" height="600"></iframe>
 
 It may take a while to load the data.
-Please go to the [homepage][link-homepage] of *Panda* if the preview is not available.
+Please follow the above link or go to the [homepage][link-homepage] of *Panda* if the preview is not available.
+
+### Detailed Data of Evaluation
+
+The detailed data of the evaluation in Section 3 is presented in the Google Spreadsheet below.
+
+<iframe src="https://docs.google.com/spreadsheets/d/e/2PACX-1vSseVVN-KKsLK3f6aHm2KWOZnEJkJ4s-S5rniYDk5lOPcZaDQBEqMCxwIv7T_NK2j_0AbuF4qRinPpw/pubhtml?widget=true&amp;headers=false" width="800" height="600"></iframe>
+
+It may take a while to load the data.
+Please follow the above link or go to the [homepage][link-homepage] of *Panda* if the preview is not available.
 
 ## Acknowledgments
 
